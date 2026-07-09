@@ -14,6 +14,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
@@ -55,6 +56,10 @@ class ClaudeSession:
             system_prompt={"type": "preset", "preset": "claude_code", "append": VOICE_STYLE},
             disallowed_tools=["AskUserQuestion"],
             can_use_tool=self._on_tool_permission,
+            # The user's own settings allow-list (e.g. "Bash(*)") would silently
+            # bypass can_use_tool. This hook forces risky calls back to "ask" so
+            # the spoken permission gate always gets its turn.
+            hooks={"PreToolUse": [HookMatcher(hooks=[self._pre_tool_hook])]},
         )
         self._client = ClaudeSDKClient(options=options)
         await self._client.connect()
@@ -105,6 +110,19 @@ class ClaudeSession:
             self.working = False
         elapsed = time.monotonic() - self.turn_started_at
         return TurnResult(text=final_text, elapsed_s=elapsed, is_error=is_error)
+
+    async def _pre_tool_hook(self, input_data, _tool_use_id, _context):
+        tool_name = str(input_data.get("tool_name", ""))
+        tool_input = dict(input_data.get("tool_input") or {})
+        if risk.classify(tool_name, tool_input).ask:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "ask",
+                    "permissionDecisionReason": "Riskant — Fahrer muss per Stimme freigeben.",
+                }
+            }
+        return {}
 
     async def _on_tool_permission(self, tool_name, tool_input, _context):
         verdict = risk.classify(tool_name, dict(tool_input or {}))

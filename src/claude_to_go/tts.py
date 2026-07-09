@@ -8,11 +8,27 @@ import re
 _EARCONS = {
     "listen": "/System/Library/Sounds/Glass.aiff",   # answer window opened
     "ack": "/System/Library/Sounds/Pop.aiff",        # input accepted / queued
+    "start": "/System/Library/Sounds/Hero.aiff",     # Claude starts working on a command
     "error": "/System/Library/Sounds/Basso.aiff",    # something went wrong
     "attention": "/System/Library/Sounds/Ping.aiff", # permission question incoming
 }
 
 _MAX_SPOKEN_CHARS = 700
+
+
+def pick_best_german_voice() -> str:
+    """Best installed German voice: Premium > Enhanced > Anna (compact)."""
+    import subprocess
+
+    listing = subprocess.run(
+        ["say", "-v", "?"], capture_output=True, text=True
+    ).stdout.splitlines()
+    german = [line.split("  ")[0].strip() for line in listing if "de_DE" in line]
+    for tier in ("(Premium)", "(Enhanced)"):
+        for name in german:
+            if tier in name:
+                return name
+    return "Anna"
 
 
 def sanitize_for_speech(text: str) -> str:
@@ -34,8 +50,8 @@ def sanitize_for_speech(text: str) -> str:
 class Speaker:
     """Interruptible TTS. `speaking` is True while audio is playing."""
 
-    def __init__(self, voice: str, rate: int, mute: bool = False) -> None:
-        self._voice = voice
+    def __init__(self, voice: str | None, rate: int, mute: bool = False) -> None:
+        self._voice = voice or pick_best_german_voice()
         self._rate = rate
         self._mute = mute
         self._proc: asyncio.subprocess.Process | None = None

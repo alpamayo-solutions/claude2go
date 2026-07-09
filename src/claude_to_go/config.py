@@ -24,8 +24,8 @@ class Config:
     whisper_model: str = "small"
     stt_language: str = "de"
 
-    # TTS
-    voice: str = "Anna"
+    # TTS — None = beste installierte deutsche Stimme (Premium > Enhanced > Anna)
+    voice: str | None = None
     speech_rate: int = 190
     mute: bool = False
 

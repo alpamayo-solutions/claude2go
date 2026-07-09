@@ -123,6 +123,7 @@ class App:
     async def _turn_worker(self) -> None:
         while True:
             message = await self._messages.get()
+            await self.speak("Ok.", sanitize=False)
             try:
                 result = await self.session.send(message)
             except Exception as exc:  # noqa: BLE001 — must not kill the loop while driving

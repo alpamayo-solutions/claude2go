@@ -22,11 +22,15 @@ async def run_doctor(config: Config) -> int:
     failures = 0
 
     # 1. TTS voice
+    from .tts import pick_best_german_voice
+
+    voice = config.voice or pick_best_german_voice()
     voices = subprocess.run(["say", "-v", "?"], capture_output=True, text=True).stdout
-    if any(line.startswith(config.voice) for line in voices.splitlines()):
-        print(f"{OK} TTS-Stimme »{config.voice}« vorhanden")
+    if any(line.startswith(voice) for line in voices.splitlines()):
+        quality = "Premium/Enhanced" if "(" in voice else "Standard — natürlichere Stimme via Systemeinstellungen → Bedienungshilfen → Gesprochene Inhalte laden"
+        print(f"{OK} TTS-Stimme »{voice}« ({quality})")
     else:
-        print(f"{FAIL} TTS-Stimme »{config.voice}« fehlt (say -v '?' zeigt Alternativen)")
+        print(f"{FAIL} TTS-Stimme »{voice}« fehlt (say -v '?' zeigt Alternativen)")
         failures += 1
 
     # 2. Microphone
@@ -91,7 +95,7 @@ async def run_doctor(config: Config) -> int:
 
     # 5. TTS audible check
     proc = await asyncio.create_subprocess_exec(
-        "say", "-v", config.voice, "-r", str(config.speech_rate),
+        "say", "-v", voice, "-r", str(config.speech_rate),
         "Claude to go ist einsatzbereit.",
     )
     await proc.wait()
