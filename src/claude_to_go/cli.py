@@ -49,7 +49,10 @@ def _config_from_args(args: argparse.Namespace) -> Config:
 
 
 def main() -> None:
-    args = _build_parser().parse_args()
+    parser = _build_parser()
+    args = parser.parse_args()
+    if args.send and args.typed:
+        parser.error("--send und --typed schließen sich aus")
 
     # A stray API key would silently switch billing from the subscription to
     # pay-as-you-go API rates — never allow that in this wrapper.
@@ -65,7 +68,9 @@ def main() -> None:
 
     from .app import App
 
-    app = App(config)
+    # --send is non-interactive: risky actions are auto-denied instead of
+    # asking questions nobody can answer.
+    app = App(config, interactive=not config.send_once)
     try:
         if config.send_once:
             asyncio.run(app.run_send_once(config.send_once))

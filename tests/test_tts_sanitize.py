@@ -30,3 +30,9 @@ def test_long_text_truncated():
 
 def test_plain_short_text_unchanged():
     assert sanitize_for_speech("Fertig. Wie machen wir weiter?") == "Fertig. Wie machen wir weiter?"
+
+
+def test_unclosed_code_fence_still_stripped():
+    result = sanitize_for_speech("Hier der Anfang:\n```python\nwhile True:\n    x += 1")
+    assert "while" not in result
+    assert "Codeblock übersprungen" in result

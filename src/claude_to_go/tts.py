@@ -20,9 +20,12 @@ def pick_best_german_voice() -> str:
     """Best installed German voice: Premium > Enhanced > Anna (compact)."""
     import subprocess
 
-    listing = subprocess.run(
-        ["say", "-v", "?"], capture_output=True, text=True
-    ).stdout.splitlines()
+    try:
+        listing = subprocess.run(
+            ["say", "-v", "?"], capture_output=True, text=True
+        ).stdout.splitlines()
+    except OSError:
+        return "Anna"
     german = [line.split("  ")[0].strip() for line in listing if "de_DE" in line]
     for tier in ("(Premium)", "(Enhanced)"):
         for name in german:
@@ -33,6 +36,8 @@ def pick_best_german_voice() -> str:
 
 def sanitize_for_speech(text: str) -> str:
     """Strip everything that is unbearable to listen to."""
+    if text.count("```") % 2 == 1:
+        text += "\n```"  # unclosed fence (truncated output) must still be stripped
     text = re.sub(r"```.*?```", " Codeblock übersprungen. ", text, flags=re.DOTALL)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
@@ -70,11 +75,22 @@ class Speaker:
         if self._mute:
             return
         async with self._lock:
-            self._proc = await asyncio.create_subprocess_exec(
-                "say", "-v", self._voice, "-r", str(self._rate), spoken,
+            # Text goes via stdin — passing it as an argv would let replies
+            # starting with "-" be parsed as `say` options (verified: writes
+            # files via -o instead of speaking).
+            proc = await asyncio.create_subprocess_exec(
+                "say", "-v", self._voice, "-r", str(self._rate),
+                stdin=asyncio.subprocess.PIPE,
             )
+            self._proc = proc
             try:
-                await self._proc.wait()
+                proc.stdin.write(spoken.encode())
+                await proc.stdin.drain()
+                proc.stdin.close()
+                await proc.wait()
+            except asyncio.CancelledError:
+                proc.kill()
+                raise
             finally:
                 self._proc = None
 

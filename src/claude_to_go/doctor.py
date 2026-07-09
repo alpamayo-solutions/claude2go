@@ -50,14 +50,18 @@ async def run_doctor(config: Config) -> int:
 
     # 3. Record 3s + STT (this triggers the macOS mic-permission prompt)
     print("  Aufnahme: sag jetzt bitte einen Satz (3 Sekunden) …")
-    recording = sd.rec(
-        int(3 * config.sample_rate),
-        samplerate=config.sample_rate,
-        channels=1,
-        dtype="int16",
-        device=device,
-    )
-    sd.wait()
+    try:
+        recording = sd.rec(
+            int(3 * config.sample_rate),
+            samplerate=config.sample_rate,
+            channels=1,
+            dtype="int16",
+            device=device,
+        )
+        sd.wait()
+    except Exception as exc:  # noqa: BLE001 — diagnostics, not tracebacks
+        print(f"{FAIL} Aufnahme fehlgeschlagen: {exc}")
+        return failures + 1
     level = float(np.abs(recording).mean())
     if level < 5:
         print(f"{FAIL} Aufnahme ist praktisch still (Level {level:.1f}) — Mikrofonberechtigung fehlt? "

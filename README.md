@@ -12,8 +12,13 @@ Single-User-Betrieb; Account/Token nicht teilen, nicht für Dritte betreiben.
 ## Installation
 
 ```bash
+uv tool install "git+https://github.com/alpamayo-solutions/claude2go"
+# oder für lokale Entwicklung:
 uv tool install --editable /Users/till/Projects/voice
 ```
+
+Voraussetzungen: macOS, installiertes Claude Code (`claude login` mit eigenem
+Abo — Accounts/Tokens niemals teilen), `uv`.
 
 Danach **einmal am Schreibtisch** (löst den macOS-Mikrofon-Prompt aus und lädt
 das Whisper-Modell herunter):

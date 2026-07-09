@@ -5,11 +5,15 @@ WAKE = Config().wake_words
 
 
 def test_wake_at_start():
-    assert match_wake("Claude, mach die Tests grün", WAKE) == "mach die tests grün"
+    assert match_wake("Claude, mach die Tests grün", WAKE) == "mach die Tests grün"
 
 
 def test_hey_prefix():
-    assert match_wake("Hey Claude erstelle einen Branch", WAKE) == "erstelle einen branch"
+    assert match_wake("Hey Claude erstelle einen Branch", WAKE) == "erstelle einen Branch"
+
+
+def test_content_keeps_punctuation_and_casing():
+    assert match_wake("Claude, öffne app.py in Version 2.1", WAKE) == "öffne app.py in Version 2.1"
 
 
 def test_whisper_variants():
@@ -21,17 +25,29 @@ def test_no_wake_mid_sentence():
     assert match_wake("ich habe claude gestern was gefragt", WAKE) is None
 
 
+def test_ich_glaube_is_not_wake():
+    assert match_wake("Ich glaube das dauert noch", WAKE) is None
+
+
+def test_die_cloud_is_not_wake():
+    assert match_wake("Die Cloud ist heute langsam", WAKE) is None
+
+
 def test_radio_noise_ignored():
     assert match_wake("und jetzt die Nachrichten um sechs", WAKE) is None
 
 
 def test_bare_wake_word():
     assert match_wake("Claude", WAKE) == ""
+    assert match_wake("Claude.", WAKE) == ""
 
 
 def test_command_stop():
     assert parse_command("stopp").command is Command.STOP
     assert parse_command("Stop!").command is Command.STOP
+    assert parse_command("bitte stopp").command is Command.STOP
+    assert parse_command("hör auf").command is Command.STOP
+    assert parse_command("stopp die Tests").command is Command.STOP
 
 
 def test_command_status():
@@ -55,3 +71,13 @@ def test_yes_no():
     assert parse_yes_no("nein lieber nicht") is False
     assert parse_yes_no("hm was war die Frage") is None
     assert parse_yes_no("ja nein vielleicht") is None
+
+
+def test_long_sentence_is_never_consent():
+    # a buffered command must not approve a risky action
+    assert parse_yes_no("Claude mach die Tests grün und push danach") is None
+
+
+def test_common_conversation_words_are_not_consent():
+    for phrase in ["mach weiter", "gut so", "klar doch", "passt schon", "bitte sehr"]:
+        assert parse_yes_no(phrase) is None, phrase

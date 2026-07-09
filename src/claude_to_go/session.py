@@ -69,6 +69,16 @@ class ClaudeSession:
             await self._client.disconnect()
             self._client = None
 
+    async def reconnect(self) -> None:
+        """Recover from a dead CLI subprocess; resumes the same conversation."""
+        try:
+            await self.stop()
+        except Exception:  # noqa: BLE001 — the old client may be beyond saving
+            self._client = None
+        self.working = False
+        self._config.continue_conversation = True
+        await self.start()
+
     async def interrupt(self) -> None:
         if self._client and self.working:
             await self._client.interrupt()
@@ -95,6 +105,10 @@ class ClaudeSession:
             await self._client.query(text)
             async for message in self._client.receive_response():
                 if isinstance(message, AssistantMessage):
+                    # Subagent (Task) side-chains stream through here too —
+                    # their text must never become the spoken final answer.
+                    if message.parent_tool_use_id:
+                        continue
                     texts = [b.text for b in message.content if isinstance(b, TextBlock)]
                     if texts:
                         final_text = " ".join(texts)

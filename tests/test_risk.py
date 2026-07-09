@@ -20,6 +20,26 @@ def test_risky_bash_commands():
         assert _bash(cmd).ask, cmd
 
 
+def test_risky_evasions_caught():
+    for cmd in ['find . -name "*.log" | xargs rm',
+                "git -C /tmp/repo push",
+                "git --work-tree=/x push origin main",
+                "ls && git push",
+                "git restore .",
+                "git stash drop",
+                "find build -delete",
+                "curl --request DELETE https://api.example.com/v1/thing"]:
+        assert _bash(cmd).ask, cmd
+
+
+def test_quoted_mentions_do_not_ask():
+    for cmd in ['git commit -m "fix rm bug"',
+                "pytest -k kill_handler",
+                'grep -rn "deploy" docs/',
+                "git log --grep 'push'"]:
+        assert not _bash(cmd).ask, cmd
+
+
 def test_risky_has_spoken_summary():
     verdict = _bash("git push origin main")
     assert verdict.ask and "git push" in verdict.spoken_summary

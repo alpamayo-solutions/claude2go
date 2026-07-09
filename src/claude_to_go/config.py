@@ -16,7 +16,7 @@ class Config:
     mic_device: str = "MacBook Pro Microphone"  # substring match; BlackHole is the default input on this machine
     sample_rate: int = 16_000
     vad_aggressiveness: int = 2
-    utterance_min_s: float = 0.4
+    utterance_min_s: float = 0.25  # a crisp "Ja" is ~0.3s — must pass the gate
     utterance_max_s: float = 30.0
     silence_end_ms: int = 800
 
@@ -29,8 +29,9 @@ class Config:
     speech_rate: int = 190
     mute: bool = False
 
-    # Interaction
-    wake_words: tuple[str, ...] = ("claude", "cloud", "klaut", "klaud", "clod", "glaube")
+    # Interaction — "glaube" is deliberately absent: "ich glaube …" is far too
+    # common in German conversation to be a wake variant.
+    wake_words: tuple[str, ...] = ("claude", "cloud", "klaut", "klaud", "clod")
     answer_window_s: float = 20.0
     permission_timeout_s: float = 30.0
 

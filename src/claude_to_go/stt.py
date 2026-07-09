@@ -7,9 +7,12 @@ import asyncio
 import numpy as np
 
 # Bias transcription toward the vocabulary we actually expect in the car.
+# Vocabulary only — no imperative phrases: Whisper regurgitates prompt
+# fragments as hallucinations on noise, and a hallucinated command would
+# self-trigger a turn.
 _INITIAL_PROMPT = (
-    "Claude, mach weiter. Git, Branch, Commit, Push, Deploy, Test, Bug, "
-    "PREKIT, Deutsch gesprochene Software-Entwicklung."
+    "Claude. Git, Branch, Commit, Push, Deploy, Test, Bug, PREKIT, "
+    "Software-Entwicklung auf Deutsch."
 )
 
 
