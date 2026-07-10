@@ -770,7 +770,8 @@ async function startMic() {
 }
 
 function resumeAudio() {
-  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  // iOS also uses a non-standard "interrupted" state after calls/Siri.
+  if (audioCtx && audioCtx.state !== "running") audioCtx.resume().catch(() => {});
 }
 
 /* ---------------- screen wake lock ---------------- */
@@ -798,7 +799,7 @@ function connect() {
   setConn("connecting");
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws = new WebSocket(`${proto}//${location.host}/ws${location.search}`);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
@@ -908,6 +909,9 @@ els.btnStart.addEventListener("click", async () => {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     audioCtx = new Ctx();
+    audioCtx.onstatechange = () => {
+      if (audioCtx.state !== "running") audioCtx.resume().catch(() => {});
+    };
     await audioCtx.resume();
     masterGain = audioCtx.createGain();
     masterGain.gain.value = 0.9;

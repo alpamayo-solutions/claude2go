@@ -32,6 +32,17 @@ def test_risky_evasions_caught():
         assert _bash(cmd).ask, cmd
 
 
+def test_wrapper_and_env_prefix_evasions_caught():
+    for cmd in ["GIT_SSH_COMMAND=ssh git push origin main",
+                "env git push",
+                "time git push origin main",
+                "nohup rm -rf build",
+                "FOO='a b' BAR=x git push",
+                "bash -c 'git push origin main'",
+                "sh -c \"rm -rf /tmp/x\""]:
+        assert _bash(cmd).ask, cmd
+
+
 def test_quoted_mentions_do_not_ask():
     for cmd in ['git commit -m "fix rm bug"',
                 "pytest -k kill_handler",

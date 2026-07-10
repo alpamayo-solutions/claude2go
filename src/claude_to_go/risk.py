@@ -15,8 +15,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# Matches at command position: line start, after ; & | ( ` or $( etc.
-_CMD = r"(?:^|[;&|`(]\s*|\bxargs\s+(?:-\S+\s+)*)"
+# Matches at command position: line start, after ; & | ( ` or $( etc.,
+# inside sh/bash/zsh -c '...' bodies, and past env-assignment/wrapper
+# prefixes (`GIT_SSH_COMMAND=ssh git push`, `env time git push`).
+_CMD = (
+    r"(?:^|[;&|`(]\s*|\bxargs\s+(?:-\S+\s+)*|\b(?:sh|bash|zsh)\s+(?:-\S+\s+)*[\"'])"
+    r"(?:(?:env|command|nohup|time|builtin|exec)\s+"
+    r"|[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|\"[^\"]*\"|\S*)\s+)*"
+)
 # Skips options (with optional values) between `git` and its subcommand, so
 # `git -C /repo push` is caught but `git log --grep 'push'` is not.
 _GIT = r"git\s+(?:-\S+(?:\s+\S+)?\s+)*"

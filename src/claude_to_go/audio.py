@@ -86,7 +86,7 @@ class UtteranceSegmenter:
         self._preroll: deque[np.ndarray] = deque(maxlen=10)
         self._recent_voiced: deque[bool] = deque(maxlen=6)
         self._current: list[np.ndarray] = []
-        self._preroll_frames = 0
+        self._voiced_count = 0
         self._silence_run = 0
         self._residual = np.zeros(0, dtype=np.int16)
 
@@ -99,7 +99,7 @@ class UtteranceSegmenter:
 
     def reset(self) -> None:
         self._current = []
-        self._preroll_frames = 0
+        self._voiced_count = 0
         self._silence_run = 0
         self._preroll.clear()
         self._recent_voiced.clear()
@@ -113,20 +113,25 @@ class UtteranceSegmenter:
             self._preroll.append(frame)
             if sum(self._recent_voiced) >= 4:  # utterance starts
                 self._current = list(self._preroll)
-                self._preroll_frames = len(self._current)
+                # The trigger frames count toward the minimum — otherwise a
+                # crisp 0.3s "Ja" loses its onset to preroll bookkeeping and
+                # gets dropped.
+                self._voiced_count = sum(self._recent_voiced)
                 self._silence_run = 0
             return
 
         self._current.append(frame)
-        self._silence_run = 0 if voiced else self._silence_run + 1
+        if voiced:
+            self._voiced_count += 1
+            self._silence_run = 0
+        else:
+            self._silence_run += 1
 
         too_long = len(self._current) >= self._max_frames
         ended = self._silence_run >= self._end_silence_frames
         if ended or too_long:
             utterance = np.concatenate(self._current)
-            # Preroll and trailing silence must not count toward the minimum —
-            # otherwise 0.4s of context around a noise blip passes the gate.
-            voiced_frames = len(self._current) - self._preroll_frames - self._silence_run
+            voiced_frames = self._voiced_count
             self.reset()
             if voiced_frames >= self._min_frames:
                 self._on_utterance(time.monotonic(), utterance)

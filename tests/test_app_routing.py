@@ -312,13 +312,14 @@ def test_grace_window_asks_meintest_du_mich_then_dispatches(tmp_path):
         app = build_app(tmp_path)
         app.config.window_grace_s = 10.0
         app._window_until = time.monotonic() - 1.0  # window just closed
-        task = asyncio.create_task(
-            app.handle_utterance("bitte auch die tests fixen", confident=True)
-        )
+        # handle_utterance returns immediately; the dialog runs in _grace_task
+        # so it cannot block the utterance-consumer loop.
+        await app.handle_utterance("bitte auch die tests fixen", confident=True)
+        assert app._grace_task is not None
         await wait_for_pending_future(app)
         assert any("Meintest du mich?" in s for s in app.speaker.said)
         await answer(app, "ja")
-        await asyncio.wait_for(task, 2.0)
+        await asyncio.wait_for(app._grace_task, 2.0)
         assert drain(app._messages) == ["bitte auch die tests fixen"]
 
     asyncio.run(scenario())
@@ -356,5 +357,64 @@ def test_status_command_speaks_session_status(tmp_path):
         await app.handle_utterance("Claude Status")
         assert app.session.status_de in app.speaker.said
         assert drain(app._messages) == []
+
+    asyncio.run(scenario())
+
+
+def test_echo_gate_catches_trailing_echo_by_overlap(tmp_path):
+    # The segmenter stamps ~0.8s after the last voiced frame; an echo of the
+    # assistant's reply must be caught even though its emission timestamp lies
+    # OUTSIDE the recorded TTS interval — the utterance STARTED inside it.
+    async def scenario():
+        app = build_app(tmp_path)
+        now = time.monotonic()
+        app._tts_intervals.append((now - 3.0, now - 1.0))  # playback just ended
+        app._window_until = now + 10.0  # answer window open (worst case)
+        await app.handle_utterance(
+            "die tests sind grün soll ich committen",
+            captured_at=now - 2.0,   # started during playback
+            captured_end=now - 0.2,  # emitted after the interval end
+        )
+        assert drain(app._messages) == []  # echo dropped, not dispatched
+
+    asyncio.run(scenario())
+
+
+def test_genuine_answer_after_tts_is_not_echo(tmp_path):
+    async def scenario():
+        app = build_app(tmp_path)
+        now = time.monotonic()
+        app._tts_intervals.append((now - 5.0, now - 2.0))
+        app._window_until = now + 10.0
+        await app.handle_utterance(
+            "erstelle einen Branch",
+            captured_at=now - 1.5,  # started after playback ended
+            captured_end=now - 0.1,
+        )
+        assert drain(app._messages) == ["erstelle einen Branch"]
+
+    asyncio.run(scenario())
+
+
+def test_button_answer_bypasses_echo_gate(tmp_path):
+    # A JA tap while the question is still playing is physical input, not echo.
+    async def scenario():
+        app = build_app(tmp_path)
+        now = time.monotonic()
+        app._current_tts_start = now - 0.5  # TTS playing right now
+        task = asyncio.create_task(app._ask_permission("testen", "raw"))
+        await wait_for_pending_future(app)
+        await app.handle_utterance("ja", confident=True, from_button=True)
+        assert await asyncio.wait_for(task, 2.0) is True
+
+    asyncio.run(scenario())
+
+
+def test_stop_during_retry_gap_aborts(tmp_path):
+    async def scenario():
+        app = build_app(tmp_path)
+        app.session.working = False  # retry gap: no active turn
+        await app._do_stop()
+        assert app._interrupted_turn is True
 
     asyncio.run(scenario())

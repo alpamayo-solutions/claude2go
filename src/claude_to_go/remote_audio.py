@@ -5,6 +5,10 @@ The iPhone (Safari PWA, see phone/index.html) connects over one WebSocket:
   mac → phone : {"type":"say","id","text"} + binary WAV · {"type":"earcon"} ·
                 {"type":"state"|"user"|"assistant"|"note"|"permission"|"window"}
 
+Security: a per-session random token is embedded in the printed/QR URL and
+required on every request — the socket controls a Claude session with write
+access, so an open LAN port is not acceptable.
+
 CarPlay/Bluetooth routes the phone's audio to the car speakers automatically.
 """
 
@@ -12,8 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import socket
 import subprocess
+import time
+from collections import deque
 from importlib import resources
 from pathlib import Path
 
@@ -26,7 +33,11 @@ from .tts import render_wav, sanitize_for_speech, pick_best_german_voice
 
 
 class RemoteSpeaker:
-    """Speaker-compatible TTS sink that plays on the connected phone."""
+    """Speaker-compatible TTS sink that plays on the connected phone.
+
+    Speech spoken while no phone is connected is buffered and replayed on the
+    next hello — a turn result must not vanish in a connection blip.
+    """
 
     def __init__(self, server: "AudioServer", voice: str | None, rate: int, mute: bool) -> None:
         self._server = server
@@ -35,8 +46,10 @@ class RemoteSpeaker:
         self._mute = mute
         self._lock = asyncio.Lock()
         self._say_id = 0
+        self._stop_gen = 0
         self._done: asyncio.Event = asyncio.Event()
         self._speaking = False
+        self.missed: deque[str] = deque(maxlen=5)
 
     @property
     def speaking(self) -> bool:
@@ -47,10 +60,16 @@ class RemoteSpeaker:
         if not spoken:
             return
         print(f"\033[36m🔊 {spoken}\033[0m", flush=True)
-        if self._mute or not self._server.connected:
+        if self._mute:
+            return
+        if not self._server.connected:
+            self.missed.append(spoken)
             return
         async with self._lock:
+            stop_gen = self._stop_gen
             wav = await render_wav(self._voice, self._rate, spoken)
+            if self._stop_gen != stop_gen:
+                return  # stopped while rendering — do not play stale speech
             duration = max(0.5, (len(wav) - 44) / 2 / 22050)
             self._say_id += 1
             self._done = asyncio.Event()
@@ -71,9 +90,15 @@ class RemoteSpeaker:
             self._done.set()
 
     def stop(self) -> None:
+        self._stop_gen += 1
         self._done.set()
         self._speaking = False
+        self.missed.clear()
         self._server.schedule_json({"type": "tts_stop"})
+
+    async def replay_missed(self) -> None:
+        while self.missed:
+            await self.say(self.missed.popleft(), sanitize=False)
 
     async def earcon(self, name: str) -> None:
         await self._server.send_json({"type": "earcon", "name": name})
@@ -86,6 +111,8 @@ class AudioServer:
         self._queue = utterance_queue
         self._ws: web.WebSocketResponse | None = None
         self._runner: web.AppRunner | None = None
+        self._token = secrets.token_urlsafe(16)
+        self._client_connected = asyncio.Event()
         self.speaker = RemoteSpeaker(self, config.voice, config.speech_rate, config.mute)
         app.event_sink = self._on_app_event
 
@@ -95,6 +122,7 @@ class AudioServer:
         web_app = web.Application()
         web_app.router.add_get("/", self._index)
         web_app.router.add_get("/manifest.json", self._manifest)
+        web_app.router.add_get("/cert.pem", self._cert)
         web_app.router.add_get("/ws", self._ws_handler)
         self._runner = web.AppRunner(web_app)
         await self._runner.setup()
@@ -111,12 +139,17 @@ class AudioServer:
         site = web.TCPSite(self._runner, "0.0.0.0", self._config.phone_port, ssl_context=ssl_ctx)
         await site.start()
 
-        url = f"{scheme}://{_lan_ip()}:{self._config.phone_port}/"
+        url = f"{scheme}://{_lan_ip()}:{self._config.phone_port}/?t={self._token}"
         print(f"\n📱 Phone-Frontend: \033[1m{url}\033[0m", flush=True)
         _print_qr(url)
         if scheme == "https":
             print("(Selbstsigniertes Zertifikat — beim ersten Öffnen in Safari "
-                  "»Details« → »Webseite öffnen« bestätigen.)\n", flush=True)
+                  "»Details« → »Webseite öffnen« bestätigen. Für den "
+                  "Home-Bildschirm-Modus /cert.pem laden und als Profil "
+                  "installieren.)\n", flush=True)
+
+    async def wait_for_client(self) -> None:
+        await self._client_connected.wait()
 
     async def stop(self) -> None:
         if self._ws is not None and not self._ws.closed:
@@ -126,7 +159,12 @@ class AudioServer:
 
     # ---------- HTTP ----------
 
-    async def _index(self, _request: web.Request) -> web.Response:
+    def _authorized(self, request: web.Request) -> bool:
+        return secrets.compare_digest(request.query.get("t", ""), self._token)
+
+    async def _index(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.Response(status=403, text="Ungültiger oder fehlender Token.")
         html = resources.files("claude_to_go").joinpath("phone/index.html").read_text("utf-8")
         return web.Response(text=html, content_type="text/html")
 
@@ -139,6 +177,14 @@ class AudioServer:
             "background_color": "#0a0c10",
             "theme_color": "#0a0c10",
         })
+
+    async def _cert(self, _request: web.Request) -> web.Response:
+        cert = Path.home() / ".c2g" / "tls" / "cert.pem"
+        if not cert.exists():
+            return web.Response(status=404)
+        return web.Response(
+            body=cert.read_bytes(), content_type="application/x-x509-ca-cert"
+        )
 
     # ---------- WebSocket ----------
 
@@ -161,17 +207,21 @@ class AudioServer:
                 pass
 
     def schedule_json(self, payload: dict) -> None:
-        asyncio.get_event_loop().create_task(self.send_json(payload))
+        asyncio.get_running_loop().create_task(self.send_json(payload))
 
     def _on_app_event(self, kind: str, fields: dict) -> None:
         self.schedule_json({"type": kind, **fields})
 
-    async def _ws_handler(self, request: web.Request) -> web.WebSocketResponse:
+    async def _ws_handler(self, request: web.Request) -> web.StreamResponse:
+        if not self._authorized(request):
+            # The socket controls a live Claude session — no token, no entry.
+            return web.Response(status=403, text="Ungültiger oder fehlender Token.")
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         if self._ws is not None and not self._ws.closed:
-            await self._ws.close()  # newest client wins (one driver, one phone)
+            await self._ws.close()  # newest authorized client wins
         self._ws = ws
+        self._client_connected.set()
         print("\033[32m📱 Phone verbunden\033[0m", flush=True)
 
         segmenter = UtteranceSegmenter(
@@ -199,19 +249,40 @@ class AudioServer:
     async def _on_client_msg(self, payload: dict) -> None:
         kind = payload.get("type")
         if kind == "hello":
+            # Authoritative snapshot: a reconnect mid-dialog must restore the
+            # permission banner, window state, and any missed speech.
+            app = self._app
             await self.send_json({
                 "type": "state",
-                "value": "working" if self._app.session.working else "idle",
+                "value": "asking" if app._answer_future else (
+                    "working" if app.session.working else "idle"
+                ),
             })
+            if app.pending_permission:
+                await self.send_json({"type": "permission", **app.pending_permission})
+            remaining = app._window_until - time.monotonic()
+            if app._answer_future is not None:
+                await self.send_json({"type": "window", "open": True,
+                                      "seconds": self._config.permission_timeout_s})
+            elif remaining > 0:
+                await self.send_json({"type": "window", "open": True,
+                                      "seconds": round(remaining, 1)})
+            asyncio.get_running_loop().create_task(self.speaker.replay_missed())
         elif kind == "tts_done":
             self.speaker.notify_done(int(payload.get("id", 0)))
         elif kind == "stop":
-            asyncio.get_event_loop().create_task(self._app._do_stop())
+            # Mirror the voice path: a pending permission dialog resolves to
+            # "nein" instead of dangling into its 30s timeout.
+            future = self._app._answer_future
+            if future is not None and not future.done():
+                future.set_result("nein")
+            asyncio.get_running_loop().create_task(self._app._do_stop())
         elif kind == "answer":
-            # Big JA/NEIN touch buttons — always confident, never echo.
+            # Big JA/NEIN touch buttons: physical input, never acoustic echo.
             value = str(payload.get("value", ""))[:200]
-            asyncio.get_event_loop().create_task(
-                self._app.handle_utterance(value, confident=True)
+            self.speaker.stop()  # tapping mid-question is intentional barge-in
+            asyncio.get_running_loop().create_task(
+                self._app.handle_utterance(value, confident=True, from_button=True)
             )
 
 

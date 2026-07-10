@@ -56,9 +56,12 @@ class App:
         self._answer_started_at: float = 0.0
         self._window_until: float = 0.0
         self._window_timer: asyncio.Task | None = None
+        self._grace_task: asyncio.Task | None = None
         self._interrupted_turn = False
         self._last_interim_spoken = ""
         self._tts_intervals: deque[tuple[float, float]] = deque(maxlen=8)
+        self._current_tts_start: float | None = None
+        self.pending_permission: dict | None = None  # phone reconnect resync
         self._speak_lock = asyncio.Lock()       # serializes TTS playback
         self._permission_lock = asyncio.Lock()  # one spoken dialog at a time
 
@@ -76,20 +79,26 @@ class App:
     async def speak(self, text: str, sanitize: bool = True) -> None:
         async with self._speak_lock:
             start = time.monotonic()
+            self._current_tts_start = start
             self.emit("state", value="speaking")
             self.emit("assistant", text=text)
             try:
                 await self.speaker.say(text, sanitize=sanitize)
             finally:
-                # +0.5s slack: an utterance segmented right at playback end
-                # still contains assistant audio.
+                self._current_tts_start = None
                 self._tts_intervals.append((start - 0.2, time.monotonic() + 0.5))
                 self.emit("state", value="working" if self.session.working else "idle")
 
-    def _in_tts(self, captured_at: float) -> bool:
-        if self.speaker.speaking:
+    def _in_tts(self, started_at: float, ended_at: float) -> bool:
+        """Echo check by OVERLAP: an echo necessarily STARTS during playback.
+        Comparing only the emission timestamp misses trailing echoes — the
+        segmenter stamps ~0.8s (silence tail) after the last voiced frame."""
+        if self._current_tts_start is not None and ended_at >= self._current_tts_start:
             return True
-        return any(start <= captured_at <= end for start, end in self._tts_intervals)
+        return any(
+            started_at <= iv_end and ended_at >= iv_start
+            for iv_start, iv_end in self._tts_intervals
+        )
 
     def _open_window(self) -> None:
         self._window_until = time.monotonic() + self.config.answer_window_s
@@ -122,19 +131,25 @@ class App:
         self,
         text: str,
         captured_at: float | None = None,
+        captured_end: float | None = None,
         usable: bool = True,
         confident: bool = True,
+        from_button: bool = False,
     ) -> None:
+        """`captured_at`/`captured_end` bracket the spoken utterance;
+        `from_button` marks physical touch input, which can never be echo."""
         text = text.strip()
         if not text:
             return
         now = time.monotonic()
         if captured_at is None:
             captured_at = now
+        if captured_end is None:
+            captured_end = captured_at
 
         # 1. Voice barge-in gate: while the assistant speaks, ONLY stop words
         # act; everything else is (potential) echo and gets dropped.
-        if self._in_tts(captured_at):
+        if not from_button and self._in_tts(captured_at, captured_end):
             wake_content = match_wake(text, self.config.wake_words)
             candidate = wake_content if wake_content else text
             if parse_command(candidate).command is Command.STOP and (
@@ -191,7 +206,10 @@ class App:
                 and confident
                 and len(text.split()) >= 3
             ):
-                await self._confirm_meant_me(text)
+                # Off the consumer task: the dialog must not block the very
+                # loop that transcribes the driver's "Ja".
+                if self._grace_task is None or self._grace_task.done():
+                    self._grace_task = asyncio.create_task(self._confirm_meant_me(text))
                 return
             else:
                 print(f"\033[2m🎤 (ignoriert) {text}\033[0m", flush=True)
@@ -237,8 +255,10 @@ class App:
 
     async def _do_stop(self) -> None:
         self.speaker.stop()
+        # Unconditional: a STOP landing in the retry gap (session.working is
+        # briefly False during reconnect) must still abort the retry loop.
+        self._interrupted_turn = True
         if self.session.working:
-            self._interrupted_turn = True
             await self.session.interrupt()
             self.logbook.log("interrupt")
             await self.speak("Okay, gestoppt. Wie machen wir weiter?", sanitize=False)
@@ -284,37 +304,39 @@ class App:
         # "Ja" could approve the wrong action.
         async with self._permission_lock:
             await self.speaker.earcon("attention")
+            self.pending_permission = {"summary": spoken_summary, "raw": raw}
             self.emit("permission", summary=spoken_summary, raw=raw)
             question = f"Claude möchte {spoken_summary}. Ja oder Nein?"
             prompt = question
-            for _attempt in range(4):
-                answer = await self._ask_and_await(prompt, self.config.permission_timeout_s)
-                if answer is None:
-                    await self.speak("Keine Antwort, ich lehne ab.", sanitize=False)
-                    self.logbook.log("permission", summary=spoken_summary, decision="timeout_deny")
-                    self.emit("permission", summary=None)
-                    return False
-                extra = parse_permission_extra(answer)
-                if extra == "repeat":
-                    prompt = question
-                    continue
-                if extra == "details":
-                    prompt = f"Der genaue Befehl ist: {raw or spoken_summary}. Ja oder Nein?"
-                    continue
-                decision = parse_yes_no(answer)
-                if decision is not None:
-                    await self.speak("Okay." if decision else "Abgelehnt.", sanitize=False)
-                    self.logbook.log(
-                        "permission", summary=spoken_summary, raw=raw,
-                        decision="allow" if decision else "deny",
-                    )
-                    self.emit("permission", summary=None)
-                    return decision
-                prompt = "Bitte antworte mit Ja oder Nein."
-            await self.speak("Das war unklar — ich lehne sicherheitshalber ab.", sanitize=False)
-            self.logbook.log("permission", summary=spoken_summary, decision="unclear_deny")
-            self.emit("permission", summary=None)
-            return False
+            try:
+                for _attempt in range(4):
+                    answer = await self._ask_and_await(prompt, self.config.permission_timeout_s)
+                    if answer is None:
+                        await self.speak("Keine Antwort, ich lehne ab.", sanitize=False)
+                        self.logbook.log("permission", summary=spoken_summary, decision="timeout_deny")
+                        return False
+                    extra = parse_permission_extra(answer)
+                    if extra == "repeat":
+                        prompt = question
+                        continue
+                    if extra == "details":
+                        prompt = f"Der genaue Befehl ist: {raw or spoken_summary}. Ja oder Nein?"
+                        continue
+                    decision = parse_yes_no(answer)
+                    if decision is not None:
+                        await self.speak("Okay." if decision else "Abgelehnt.", sanitize=False)
+                        self.logbook.log(
+                            "permission", summary=spoken_summary, raw=raw,
+                            decision="allow" if decision else "deny",
+                        )
+                        return decision
+                    prompt = "Bitte antworte mit Ja oder Nein."
+                await self.speak("Das war unklar — ich lehne sicherheitshalber ab.", sanitize=False)
+                self.logbook.log("permission", summary=spoken_summary, decision="unclear_deny")
+                return False
+            finally:
+                self.pending_permission = None
+                self.emit("permission", summary=None)
 
     async def _ask_and_await(self, question: str, timeout: float) -> str | None:
         # Future exists BEFORE the question plays: a fast answer right after
@@ -322,13 +344,20 @@ class App:
         self._answer_future = asyncio.get_running_loop().create_future()
         self._answer_started_at = time.monotonic()
         self.emit("state", value="asking")
+        # Phone UI: enable JA/NEIN for every spoken question (also the grace
+        # dialog, which has no permission banner).
+        self.emit("window", open=True, seconds=timeout)
         try:
             await self.speak(question, sanitize=False)
+            # speak()'s finally emitted working/idle — restore the ask state
+            # for the whole answer-wait period.
+            self.emit("state", value="asking")
             return await asyncio.wait_for(self._answer_future, timeout)
         except asyncio.TimeoutError:
             return None
         finally:
             self._answer_future = None
+            self.emit("window", open=False)
             self.emit("state", value="working" if self.session.working else "idle")
 
     # ---------- turn execution ----------
@@ -340,8 +369,13 @@ class App:
             await self.speaker.earcon("start")
             self.emit("state", value="working")
             result = await self._run_turn_with_retry(message)
-            for missed in self.session.take_unanswered_injections():
-                self._messages.put_nowait(missed)
+            pending_injections = self.session.take_unanswered_injections()
+            if result is not None and not self._interrupted_turn:
+                # Re-queue only after a normal turn end. After a STOP the
+                # driver aborted everything; after a failure they were told
+                # to repeat — silently replaying would surprise them.
+                for missed in pending_injections:
+                    self._messages.put_nowait(missed)
             if result is None or self._interrupted_turn:
                 self.emit("state", value="idle")
                 continue
@@ -355,12 +389,20 @@ class App:
 
     async def _run_turn_with_retry(self, message: str) -> TurnResult | None:
         """Dead-zone resilience: on failure reconnect once and re-send the
-        SAME message automatically — the driver must not re-dictate it."""
+        message automatically — the driver must not re-dictate it. The retry
+        is framed as reconciliation so half-executed side effects (edits,
+        commits) are checked instead of blindly replayed."""
         for attempt in (1, 2):
+            outbound = message if attempt == 1 else (
+                "Die Verbindung brach eben mitten im vorherigen Versuch dieses "
+                "Auftrags ab. Prüfe zuerst, was davon schon passiert ist "
+                "(z.B. git status, Datei-Inhalte), und führe dann nur den "
+                f"fehlenden Rest aus: {message}"
+            )
             try:
                 started = time.monotonic()
                 self.logbook.log("turn_start", message=message, attempt=attempt)
-                result = await self.session.send(message)
+                result = await self.session.send(outbound)
                 self.logbook.log(
                     "turn_end", elapsed_s=round(time.monotonic() - started, 1),
                     is_error=result.is_error,
@@ -372,6 +414,8 @@ class App:
                 print(f"\033[31mFehler: {exc}\033[0m", flush=True)
                 self.logbook.log("turn_error", error=str(exc)[:300], attempt=attempt)
                 await self.speaker.earcon("error")
+                if self._interrupted_turn:
+                    return None  # driver said stop — no retry, no failure speech
                 if attempt == 2:
                     break
                 try:
@@ -379,6 +423,8 @@ class App:
                 except Exception as reconnect_exc:  # noqa: BLE001
                     print(f"\033[31mReconnect fehlgeschlagen: {reconnect_exc}\033[0m", flush=True)
                     break
+                if self._interrupted_turn:
+                    return None
                 await self.speak(
                     "Verbindung war kurz weg — ich schicke deinen Auftrag nochmal.",
                     sanitize=False,
@@ -428,8 +474,12 @@ class App:
 
     async def _consume_utterances(self, utterances: asyncio.Queue, transcriber) -> None:
         while True:
-            captured_at, audio = await utterances.get()
-            if not self._in_tts(captured_at):
+            captured_end, audio = await utterances.get()
+            # The segmenter stamps at emission (end of trailing silence); the
+            # utterance STARTED len/rate seconds earlier — the echo gate needs
+            # both ends to check overlap with TTS playback.
+            captured_start = captured_end - len(audio) / self.config.sample_rate
+            if not self._in_tts(captured_start, captured_end):
                 await self.speaker.earcon("heard")  # "got you, transcribing"
             transcript = await transcriber.transcribe(audio)
             if transcript.text:
@@ -440,7 +490,8 @@ class App:
                 )
                 await self.handle_utterance(
                     transcript.text,
-                    captured_at=captured_at,
+                    captured_at=captured_start,
+                    captured_end=captured_end,
                     usable=transcript.usable,
                     confident=transcript.confident,
                 )
@@ -471,6 +522,8 @@ class App:
         finally:
             worker.cancel()
             stdin_task.cancel()
+            if self._grace_task is not None:
+                self._grace_task.cancel()
             self.mic.stop()
             self.logbook.close()
             await self.session.stop()
@@ -485,11 +538,16 @@ class App:
         server = AudioServer(self.config, self, utterances)
         self.speaker = server.speaker  # TTS now plays on the phone
         await server.start()
+        # Greeting and --continue recap must reach ears — wait for the phone.
+        print("Warte auf das Telefon …", flush=True)
+        await server.wait_for_client()
         worker = await self._startup("Claude to go ist bereit.")
         try:
             await self._consume_utterances(utterances, transcriber)
         finally:
             worker.cancel()
+            if self._grace_task is not None:
+                self._grace_task.cancel()
             await server.stop()
             self.logbook.close()
             await self.session.stop()

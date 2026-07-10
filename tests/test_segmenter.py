@@ -63,11 +63,11 @@ def test_max_length_force_cut():
     assert len(emitted) == 1
     _t, utterance = emitted[0]
     assert len(utterance) == 20 * FRAME_LEN
-    # voiced_frames = 20 - 4 preroll - 0 silence = 16 >= 10
+    # voiced_frames = 4 trigger + 16 following = 20 >= 10
 
 
 def test_reset_drops_in_progress_utterance():
-    seg, emitted = _make([True] * 18 + [False] * 10)
+    seg, emitted = _make([True] * 8 + [False] * 20)
     seg.feed(_frames(8))          # utterance started, in progress
     assert seg._current           # sanity: something is buffered
     seg.reset()
