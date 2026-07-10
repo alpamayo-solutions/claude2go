@@ -26,8 +26,8 @@ from . import risk
 from .config import Config
 from .prompts import VOICE_STYLE
 
-# async (spoken_summary) -> True (allow) / False (deny)
-PermissionAsker = Callable[[str], Awaitable[bool]]
+# async (spoken_summary, raw_detail) -> True (allow) / False (deny)
+PermissionAsker = Callable[[str, str], Awaitable[bool]]
 
 
 @dataclass
@@ -169,7 +169,7 @@ class ClaudeSession:
         verdict = risk.classify(tool_name, dict(tool_input or {}))
         if not verdict.ask:
             return PermissionResultAllow()
-        allowed = await self._ask_permission(verdict.spoken_summary)
+        allowed = await self._ask_permission(verdict.spoken_summary, verdict.raw)
         if allowed:
             return PermissionResultAllow()
         return PermissionResultDeny(

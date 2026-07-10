@@ -40,9 +40,46 @@ def test_quoted_mentions_do_not_ask():
         assert not _bash(cmd).ask, cmd
 
 
-def test_risky_has_spoken_summary():
+def test_git_push_summary_is_german_category_with_raw():
+    # Spoken summaries are category-based German, not raw shell — the raw
+    # command lives on the verdict for the "details" voice request.
     verdict = _bash("git push origin main")
-    assert verdict.ask and "git push" in verdict.spoken_summary
+    assert verdict.ask
+    assert "pushen" in verdict.spoken_summary
+    assert "origin main" in verdict.spoken_summary  # push target read aloud
+    assert verdict.raw == "git push origin main"
+
+
+def test_rm_summary_is_german_category_with_raw():
+    verdict = _bash("rm -rf build/")
+    assert verdict.ask
+    assert "löschen" in verdict.spoken_summary
+    assert "build/" in verdict.spoken_summary
+    assert verdict.raw == "rm -rf build/"
+
+
+def test_all_risky_summaries_are_nonempty_and_carry_raw():
+    for cmd in ["sudo reboot", "git reset --hard", "npm publish",
+                "docker system prune", "kill -9 42", "find build -delete"]:
+        verdict = _bash(cmd)
+        assert verdict.ask, cmd
+        assert verdict.spoken_summary, cmd
+        assert verdict.raw, cmd
+
+
+def test_raw_is_shortened_for_very_long_commands():
+    long_cmd = "git push origin " + "x" * 300
+    verdict = _bash(long_cmd)
+    assert verdict.ask
+    assert len(verdict.raw) <= 160
+    assert verdict.raw.endswith("…")
+
+
+def test_safe_command_has_empty_summary_and_raw():
+    verdict = _bash("git status")
+    assert not verdict.ask
+    assert verdict.spoken_summary == ""
+    assert verdict.raw == ""
 
 
 def test_safe_builtin_tools():

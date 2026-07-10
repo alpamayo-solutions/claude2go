@@ -1,5 +1,11 @@
 from claude_to_go.config import Config
-from claude_to_go.wake import Command, match_wake, parse_command, parse_yes_no
+from claude_to_go.wake import (
+    Command,
+    match_wake,
+    parse_command,
+    parse_permission_extra,
+    parse_yes_no,
+)
 
 WAKE = Config().wake_words
 
@@ -64,6 +70,60 @@ def test_command_message():
 def test_stop_inside_long_sentence_is_message():
     routed = parse_command("stopp die Tests nicht, sondern erweitere sie")
     assert routed.command is Command.MESSAGE
+
+
+def test_command_note_merk_dir():
+    routed = parse_command("merk dir kauf Milch")
+    assert routed.command is Command.NOTE
+    assert routed.text == "kauf Milch"
+
+
+def test_command_note_notiere():
+    routed = parse_command("notiere kauf milch")
+    assert routed.command is Command.NOTE
+    assert routed.text == "kauf milch"
+
+
+def test_note_keeps_original_casing_after_punctuation():
+    routed = parse_command("Merk dir: PREKIT Demo vorbereiten")
+    assert routed.command is Command.NOTE
+    assert routed.text == "PREKIT Demo vorbereiten"
+
+
+def test_bare_note_prefix_without_text_is_message():
+    # "merk dir" with nothing to note must not create an empty note
+    assert parse_command("merk dir").command is not Command.NOTE
+
+
+def test_command_briefing():
+    assert parse_command("briefing").command is Command.BRIEFING
+    assert parse_command("Lagebericht bitte").command is Command.BRIEFING
+
+
+def test_briefing_inside_long_sentence_is_message():
+    routed = parse_command("gib mir bitte ein ausführliches briefing zum Projektstand")
+    assert routed.command is Command.MESSAGE
+
+
+def test_permission_extra_repeat():
+    assert parse_permission_extra("wiederhole") == "repeat"
+    assert parse_permission_extra("nochmal") == "repeat"
+
+
+def test_permission_extra_details():
+    assert parse_permission_extra("details") == "details"
+    assert parse_permission_extra("welcher Befehl") == "details"
+
+
+def test_permission_extra_long_sentence_is_none():
+    assert parse_permission_extra(
+        "kannst du mir das bitte noch einmal komplett vorlesen"
+    ) is None
+
+
+def test_permission_extra_plain_answer_is_none():
+    assert parse_permission_extra("ja") is None
+    assert parse_permission_extra("nein") is None
 
 
 def test_yes_no():

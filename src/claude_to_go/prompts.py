@@ -30,3 +30,16 @@ fragt bei Bedarf per Stimme nach dem Status.
 Gedanken ein, beantworte ihn SOFORT in ein bis zwei kurzen Sätzen und arbeite \
 dann nahtlos weiter.
 """
+
+RECAP_PROMPT = (
+    "Fasse in maximal zwei kurzen Sätzen zusammen, woran wir zuletzt "
+    "gearbeitet haben und was noch offen ist. Keine Aufzählung, gesprochener Stil."
+)
+
+BRIEFING_PROMPT = (
+    "Gib mir ein kurzes Morgen-Briefing zu diesem Projekt: aktueller Branch "
+    "und Git-Status, die letzten ein, zwei Commits, CI-Status falls per gh "
+    "verfügbar, und offene Aufgaben falls die alp-Plattform verfügbar ist. "
+    "Maximal vier kurze gesprochene Sätze, keine Aufzählung, keine Pfade. "
+    "Details nenne ich dir auf Nachfrage."
+)

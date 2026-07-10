@@ -40,17 +40,43 @@ c2g --model opus     # Modell-Override
 
 ### Im Auto
 
-- **„Claude, …"** — Auftrag oder Gedanke; auch „Hey Claude …".
+- **„Claude, …"** — Auftrag oder Gedanke; auch „Hey Claude …". Ein leiser
+  Tick bestätigt: gehört, wird verarbeitet. Der Hero-Klang: er legt los.
 - Nach jeder vorgelesenen Antwort ist das Mikro **20 Sekunden offen** — einfach
-  antworten, ohne Wake-Word (Glas-Klang = Fenster offen).
-- **„Claude, stopp"** — bricht Sprachausgabe und laufende Arbeit ab.
+  antworten, ohne Wake-Word (Glas-Klang = offen, Flaschen-Klang = zu). Sprichst
+  du kurz nach dem Schließen, fragt er nach: „Meintest du mich?"
+- **„Claude, stopp"** — bricht Sprachausgabe und Arbeit ab; funktioniert auch
+  **mitten in seine Stimme hinein** (Voice-Barge-in).
 - **„Claude, Status"** — sagt dir, ob und wie lange er schon arbeitet.
-- Riskante Aktionen (push, rm, deploy, Plattform-Schreibzugriffe …) fragt er
-  laut an: mit **Ja** oder **Nein** antworten. Keine Antwort = abgelehnt,
-  Claude arbeitet am Rest weiter.
-- Während Claude arbeitet ist es still. Neue Aufträge werden gepuffert
-  (Plopp-Klang) und nach dem Turn gesendet.
+- **„Claude, merk dir …"** — Blitznotiz in `NOTIZEN.md`, quittiert nur per
+  Plopp; kein Claude-Turn, unter einer Sekunde.
+- **„Claude, Briefing"** — Branch, Git-Status, CI, offene Aufgaben in vier Sätzen.
+- Während Claude arbeitet: **einfach reinreden** — Zwischenfragen werden in den
+  laufenden Turn injiziert und sofort beantwortet.
+- Riskante Aktionen fragt er in Klartext an („Claude möchte auf Git pushen:
+  origin main. Ja oder Nein?"). **Ja/Nein** entscheiden, **„wiederhole"**
+  wiederholt, **„details"** liest den Rohbefehl vor. Whisper-unsichere Antworten
+  (Radio, Rauschen) werden ignoriert — nur klare Antworten zählen.
+- Bricht die Verbindung ab (Funkloch), verbindet er sich neu und **schickt
+  deinen Auftrag automatisch nochmal**.
+- `c2g --continue` liest beim Start ein kurzes Recap vor: wo wart ihr stehen
+  geblieben.
+- Jede Fahrt wird als JSONL-Protokoll unter `~/.c2g/logs/` mitgeschrieben
+  (`--no-log` schaltet ab).
 - Enter-Taste stoppt die Sprachausgabe, `q` + Enter beendet, Ctrl+C auch.
+
+### iPhone als Mikro & Lautsprecher (CarPlay-nah)
+
+```bash
+c2g --phone
+```
+
+Startet einen Server samt QR-Code; iPhone scannen, Safari öffnet die PWA
+(einmal dem selbstsignierten Zertifikat vertrauen, „Start" tippen). Ab dann:
+iPhone-Mikro nimmt auf, Antworten spielen über das iPhone — und CarPlay/
+Bluetooth routet sie auf die Autoboxen. Große Ja/Nein/Stopp-Buttons als
+Touch-Fallback, Live-Transkript auf dem Display. Mit Tailscale/Headscale
+funktioniert das auch, wenn der Mac zuhause bleibt.
 
 ## Konfiguration
 
@@ -59,9 +85,9 @@ Defaults in `src/claude_to_go/config.py`; die wichtigsten per Flag:
 nicht das Standard-Input-Gerät, da dort BlackHole hängt), `--voice` (Default
 Anna), `--whisper-model` (Default small), `--mute`.
 
-## Grenzen (v1)
+## Grenzen
 
-- Während der Sprachausgabe ist das Mikro stumm (Echo-Schutz) — unterbrechen
-  per Enter-Taste, nicht per Stimme.
+- Während der Sprachausgabe reagiert das Mikro nur auf Stopp-Wörter
+  (Echo-Schutz); alles andere sagst du danach.
 - Docker/Compose ist bewusst kein Setup-Weg: Container auf macOS haben keinen
   Mikrofon-/Lautsprecher-Zugriff.

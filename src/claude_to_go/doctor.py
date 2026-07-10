@@ -74,9 +74,10 @@ async def run_doctor(config: Config) -> int:
     from .stt import Transcriber
 
     transcriber = Transcriber(config.whisper_model, config.stt_language)
-    text = transcriber.transcribe_sync(recording[:, 0].astype(np.float32) / 32768.0)
-    if text:
-        print(f"{OK} Verstanden: »{text}«")
+    transcript = transcriber.transcribe_sync(recording[:, 0].astype(np.float32) / 32768.0)
+    if transcript.text:
+        confidence = "sicher" if transcript.confident else ("brauchbar" if transcript.usable else "unsicher")
+        print(f"{OK} Verstanden ({confidence}): »{transcript.text}«")
     else:
         print(f"{WARN} Nichts verstanden — bei stiller Aufnahme normal")
 

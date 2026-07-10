@@ -33,8 +33,20 @@ class Config:
     # common in German conversation to be a wake variant.
     wake_words: tuple[str, ...] = ("claude", "cloud", "klaut", "klaud", "clod")
     answer_window_s: float = 20.0
+    window_grace_s: float = 6.0    # "Meintest du mich?" period after the window closes
     permission_timeout_s: float = 30.0
+
+    # Drive log (JSONL); None disables
+    log_dir: Path | None = field(default_factory=lambda: Path.home() / ".c2g" / "logs")
+
+    # Phone frontend
+    phone: bool = False
+    phone_port: int = 8443
+    phone_http: bool = False  # plain HTTP (desktop testing via localhost only)
 
     # Modes
     typed: bool = False
     send_once: str | None = None
+
+    # Flash notes land here (relative to cwd)
+    notes_file: str = "NOTIZEN.md"

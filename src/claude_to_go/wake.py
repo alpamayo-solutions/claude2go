@@ -12,6 +12,8 @@ from functools import lru_cache
 class Command(Enum):
     STOP = "stop"
     STATUS = "status"
+    NOTE = "note"          # "merk dir …" — flash note, no Claude turn
+    BRIEFING = "briefing"  # curated morning briefing turn
     MESSAGE = "message"
 
 
@@ -24,6 +26,8 @@ class Routed:
 _STOP_WORDS = {"stopp", "stop", "halt", "abbrechen", "abbruch"}
 _STOP_PHRASES = ("hör auf", "hoer auf")
 _STATUS_WORDS = {"status", "zwischenstand", "stand"}
+_NOTE_PREFIXES = ("merk dir", "merke dir", "notiere", "notiz", "schreib dir auf", "merken")
+_BRIEFING_WORDS = {"briefing", "morgenbriefing", "lagebericht"}
 
 
 def _normalize(text: str) -> str:
@@ -67,6 +71,14 @@ def parse_command(content: str) -> Routed:
             return Routed(Command.STOP, "")
         if len(tokens) <= 3 and any(t in _STATUS_WORDS for t in tokens[:2]):
             return Routed(Command.STATUS, "")
+        if len(tokens) <= 3 and any(t in _BRIEFING_WORDS for t in tokens[:2]):
+            return Routed(Command.BRIEFING, "")
+    for prefix in _NOTE_PREFIXES:
+        if normalized.startswith(prefix):
+            # keep the note text in original casing/punctuation
+            note = content.strip()[len(prefix):].lstrip(" ,.:;—-")
+            if note:
+                return Routed(Command.NOTE, note)
     return Routed(Command.MESSAGE, content.strip())
 
 
@@ -81,6 +93,23 @@ _NO_WORDS = {
     "nein", "ne", "nee", "nö", "no", "nope", "nicht", "stopp", "stop", "lass",
     "ablehnen", "abgelehnt", "verboten", "niemals", "warte", "abbrechen",
 }
+
+
+_REPEAT_WORDS = {"wiederhole", "wiederholen", "nochmal", "wie bitte", "was"}
+_DETAIL_WORDS = {"details", "detail", "welcher", "welchen", "zeig", "vorlesen"}
+
+
+def parse_permission_extra(text: str) -> str | None:
+    """Detect 'repeat the question' / 'read the raw command' requests."""
+    normalized = _normalize(text)
+    tokens = normalized.split()
+    if not tokens or len(tokens) > 5:
+        return None
+    if any(t in _REPEAT_WORDS for t in tokens) or normalized == "wie bitte":
+        return "repeat"
+    if any(t in _DETAIL_WORDS for t in tokens):
+        return "details"
+    return None
 
 
 def parse_yes_no(text: str) -> bool | None:

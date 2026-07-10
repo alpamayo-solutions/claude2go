@@ -1,18 +1,21 @@
 """Microphone capture and VAD-based utterance segmentation.
 
-Runs in the sounddevice callback thread; complete utterances (int16 numpy
-arrays at 16 kHz mono) are pushed thread-safely into an asyncio queue.
+`UtteranceSegmenter` is transport-agnostic: it eats 30 ms int16 frames and
+emits complete utterances. `MicListener` feeds it from the local microphone
+(sounddevice callback thread); the phone frontend feeds it from a WebSocket.
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
+from collections.abc import Callable
 
 import numpy as np
 import sounddevice as sd
 
-_FRAME_MS = 30
+FRAME_MS = 30
 
 
 class MicrophoneError(RuntimeError):
@@ -33,7 +36,7 @@ def find_input_device(name_substring: str) -> int:
     return matches[0][0]
 
 
-class _Vad:
+class Vad:
     """webrtcvad if available, otherwise an adaptive RMS gate."""
 
     def __init__(self, aggressiveness: int, sample_rate: int) -> None:
@@ -56,37 +59,29 @@ class _Vad:
         return voiced
 
 
-class MicListener:
-    """Continuously segments microphone input into utterances.
+class UtteranceSegmenter:
+    """Segments a stream of int16 samples into utterances.
 
-    Queue items are ``(captured_at_monotonic, int16_array)`` — the timestamp
-    is taken when the utterance ends, so downstream routing can check answer
-    windows against speaking time instead of (later) transcription time.
-
-    `muted` suppresses segmentation (used while TTS is speaking, to avoid
-    the assistant voice feeding back into the wake-word detector).
+    Feed arbitrary-length sample chunks via `feed()`; complete utterances are
+    passed to `on_utterance(captured_at_monotonic, samples)`. Thread-agnostic —
+    the callback runs on whatever thread calls feed().
     """
 
     def __init__(
         self,
-        device_substring: str,
+        vad,
         sample_rate: int,
-        vad_aggressiveness: int,
         min_s: float,
         max_s: float,
         silence_end_ms: int,
-        loop: asyncio.AbstractEventLoop,
-        out_queue: asyncio.Queue,
+        on_utterance: Callable[[float, np.ndarray], None],
     ) -> None:
-        self._sample_rate = sample_rate
-        self._frame_len = int(sample_rate * _FRAME_MS / 1000)
-        self._vad = _Vad(vad_aggressiveness, sample_rate)
-        self._min_frames = int(min_s * 1000 / _FRAME_MS)
-        self._max_frames = int(max_s * 1000 / _FRAME_MS)
-        self._end_silence_frames = max(1, silence_end_ms // _FRAME_MS)
-        self._loop = loop
-        self._queue = out_queue
-        self.muted = False
+        self._vad = vad
+        self._frame_len = int(sample_rate * FRAME_MS / 1000)
+        self._min_frames = int(min_s * 1000 / FRAME_MS)
+        self._max_frames = int(max_s * 1000 / FRAME_MS)
+        self._end_silence_frames = max(1, silence_end_ms // FRAME_MS)
+        self._on_utterance = on_utterance
 
         self._preroll: deque[np.ndarray] = deque(maxlen=10)
         self._recent_voiced: deque[bool] = deque(maxlen=6)
@@ -95,34 +90,20 @@ class MicListener:
         self._silence_run = 0
         self._residual = np.zeros(0, dtype=np.int16)
 
-        device = find_input_device(device_substring)
-        self._stream = sd.InputStream(
-            device=device,
-            samplerate=sample_rate,
-            channels=1,
-            dtype="int16",
-            blocksize=self._frame_len,
-            callback=self._on_audio,
-        )
-
-    def start(self) -> None:
-        self._stream.start()
-
-    def stop(self) -> None:
-        self._stream.stop()
-        self._stream.close()
-
-    # --- callback thread below this line ---
-
-    def _on_audio(self, indata: np.ndarray, frames: int, _time, status) -> None:
-        if self.muted:
-            self._reset()
-            return
-        samples = np.concatenate([self._residual, indata[:, 0].copy()])
+    def feed(self, samples: np.ndarray) -> None:
+        samples = np.concatenate([self._residual, samples.astype(np.int16, copy=False)])
         n_full = len(samples) // self._frame_len
         for i in range(n_full):
             self._process_frame(samples[i * self._frame_len : (i + 1) * self._frame_len])
         self._residual = samples[n_full * self._frame_len :]
+
+    def reset(self) -> None:
+        self._current = []
+        self._preroll_frames = 0
+        self._silence_run = 0
+        self._preroll.clear()
+        self._recent_voiced.clear()
+        self._residual = np.zeros(0, dtype=np.int16)
 
     def _process_frame(self, frame: np.ndarray) -> None:
         voiced = self._vad.is_speech(frame)
@@ -146,17 +127,65 @@ class MicListener:
             # Preroll and trailing silence must not count toward the minimum —
             # otherwise 0.4s of context around a noise blip passes the gate.
             voiced_frames = len(self._current) - self._preroll_frames - self._silence_run
-            self._reset()
+            self.reset()
             if voiced_frames >= self._min_frames:
-                import time
+                self._on_utterance(time.monotonic(), utterance)
 
-                self._loop.call_soon_threadsafe(
-                    self._queue.put_nowait, (time.monotonic(), utterance)
-                )
 
-    def _reset(self) -> None:
-        self._current = []
-        self._preroll_frames = 0
-        self._silence_run = 0
-        self._preroll.clear()
-        self._recent_voiced.clear()
+class MicListener:
+    """Feeds the local microphone into an UtteranceSegmenter.
+
+    Queue items are ``(captured_at_monotonic, int16_array)``. `muted` drops
+    audio entirely (typed mode etc.); during TTS the mic intentionally stays
+    OPEN — the app routes those utterances through the stop-only gate.
+    """
+
+    def __init__(
+        self,
+        device_substring: str,
+        sample_rate: int,
+        vad_aggressiveness: int,
+        min_s: float,
+        max_s: float,
+        silence_end_ms: int,
+        loop: asyncio.AbstractEventLoop,
+        out_queue: asyncio.Queue,
+    ) -> None:
+        self._loop = loop
+        self._queue = out_queue
+        self.muted = False
+        self._segmenter = UtteranceSegmenter(
+            vad=Vad(vad_aggressiveness, sample_rate),
+            sample_rate=sample_rate,
+            min_s=min_s,
+            max_s=max_s,
+            silence_end_ms=silence_end_ms,
+            on_utterance=self._emit,
+        )
+        device = find_input_device(device_substring)
+        self._stream = sd.InputStream(
+            device=device,
+            samplerate=sample_rate,
+            channels=1,
+            dtype="int16",
+            blocksize=int(sample_rate * FRAME_MS / 1000),
+            callback=self._on_audio,
+        )
+
+    def start(self) -> None:
+        self._stream.start()
+
+    def stop(self) -> None:
+        self._stream.stop()
+        self._stream.close()
+
+    # --- callback thread below this line ---
+
+    def _emit(self, captured_at: float, utterance: np.ndarray) -> None:
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, (captured_at, utterance))
+
+    def _on_audio(self, indata: np.ndarray, frames: int, _time, status) -> None:
+        if self.muted:
+            self._segmenter.reset()
+            return
+        self._segmenter.feed(indata[:, 0].copy())

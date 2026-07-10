@@ -6,12 +6,15 @@ import asyncio
 import re
 
 _EARCONS = {
-    "listen": "/System/Library/Sounds/Glass.aiff",   # answer window opened
-    "ack": "/System/Library/Sounds/Pop.aiff",        # input accepted / queued
-    "start": "/System/Library/Sounds/Hero.aiff",     # Claude starts working on a command
-    "error": "/System/Library/Sounds/Basso.aiff",    # something went wrong
-    "attention": "/System/Library/Sounds/Ping.aiff", # permission question incoming
+    "listen": "/System/Library/Sounds/Glass.aiff",       # answer window opened
+    "ack": "/System/Library/Sounds/Pop.aiff",            # input accepted / queued
+    "heard": "/System/Library/Sounds/Tink.aiff",         # utterance captured, STT running
+    "start": "/System/Library/Sounds/Hero.aiff",         # Claude starts working on a command
+    "window_close": "/System/Library/Sounds/Bottle.aiff",# answer window just closed
+    "error": "/System/Library/Sounds/Basso.aiff",        # something went wrong
+    "attention": "/System/Library/Sounds/Ping.aiff",     # permission question incoming
 }
+EARCON_NAMES = tuple(_EARCONS)
 
 _MAX_SPOKEN_CHARS = 700
 
@@ -50,6 +53,29 @@ def sanitize_for_speech(text: str) -> str:
     if len(text) > _MAX_SPOKEN_CHARS:
         text = text[:_MAX_SPOKEN_CHARS].rsplit(" ", 1)[0] + " … Für Details frag nach."
     return text.strip()
+
+
+async def render_wav(voice: str, rate: int, text: str) -> bytes:
+    """Render text to a 22.05 kHz mono 16-bit WAV via `say -o` (for the phone
+    frontend, which plays audio itself instead of the Mac speakers)."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        out_path = Path(f.name)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "say", "-v", voice, "-r", str(rate),
+            "-o", str(out_path), "--data-format=LEI16@22050",
+            stdin=asyncio.subprocess.PIPE,
+        )
+        proc.stdin.write(text.encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+        await proc.wait()
+        return out_path.read_bytes()
+    finally:
+        out_path.unlink(missing_ok=True)
 
 
 class Speaker:
