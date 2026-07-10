@@ -38,10 +38,17 @@ class TurnResult:
 
 
 class ClaudeSession:
-    def __init__(self, config: Config, ask_permission: PermissionAsker) -> None:
+    def __init__(
+        self,
+        config: Config,
+        ask_permission: PermissionAsker,
+        on_interjection_reply: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         self._config = config
         self._ask_permission = ask_permission
+        self._on_interjection_reply = on_interjection_reply
         self._client: ClaudeSDKClient | None = None
+        self._unanswered_injections: list[str] = []
         self.working = False
         self.turn_started_at: float | None = None
         self.last_tool: str | None = None
@@ -83,6 +90,20 @@ class ClaudeSession:
         if self._client and self.working:
             await self._client.interrupt()
 
+    async def inject(self, text: str) -> None:
+        """Steer the RUNNING turn — like typing mid-turn in interactive Claude
+        Code. Verified: the message is absorbed into the current turn and
+        answered at the next step boundary (single ResultMessage)."""
+        assert self._client is not None, "session not started"
+        self._unanswered_injections.append(text)
+        await self._client.query(text)
+
+    def take_unanswered_injections(self) -> list[str]:
+        """Injections the turn never got to (it ended first) — the caller
+        should re-send them as regular messages."""
+        pending, self._unanswered_injections = self._unanswered_injections, []
+        return pending
+
     @property
     def status_de(self) -> str:
         if not self.working or self.turn_started_at is None:
@@ -112,6 +133,12 @@ class ClaudeSession:
                     texts = [b.text for b in message.content if isinstance(b, TextBlock)]
                     if texts:
                         final_text = " ".join(texts)
+                        # First text after a mid-turn interjection is its
+                        # answer — surface it immediately, don't wait for
+                        # the turn to finish.
+                        if self._unanswered_injections and self._on_interjection_reply:
+                            self._unanswered_injections.clear()
+                            await self._on_interjection_reply(final_text)
                     for block in message.content:
                         if isinstance(block, ToolUseBlock):
                             self.last_tool = block.name

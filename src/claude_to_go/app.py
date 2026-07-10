@@ -27,7 +27,10 @@ class App:
         self.config = config
         self.interactive = interactive
         self.speaker = Speaker(config.voice, config.speech_rate, config.mute)
-        self.session = ClaudeSession(config, self._ask_permission)
+        self.session = ClaudeSession(
+            config, self._ask_permission, on_interjection_reply=self._on_interjection_reply
+        )
+        self._last_interim_spoken = ""
         self.mic = None  # set in voice mode
         self._messages: asyncio.Queue[str] = asyncio.Queue()
         self._answer_future: asyncio.Future[str] | None = None
@@ -106,8 +109,12 @@ class App:
             await self.speak(self.session.status_de, sanitize=False)
             return
         if self.session.working:
+            # Steer the running turn directly — answered at the next step
+            # boundary instead of waiting for the turn to finish.
             await self.speaker.earcon("ack")
-            print("\033[2m  (gepuffert bis zum Turn-Ende)\033[0m", flush=True)
+            print("\033[2m  (in laufenden Turn eingeworfen)\033[0m", flush=True)
+            await self.session.inject(routed.text)
+            return
         self._messages.put_nowait(routed.text)
 
     async def _do_stop(self) -> None:
@@ -163,8 +170,11 @@ class App:
             message = await self._messages.get()
             self._interrupted_turn = False
             try:
-                await self.speak("Ok.", sanitize=False)
+                await self.speaker.earcon("start")
                 result = await self.session.send(message)
+                # Injections the turn never processed become regular messages.
+                for missed in self.session.take_unanswered_injections():
+                    self._messages.put_nowait(missed)
                 if self._interrupted_turn:
                     continue  # stale result of an aborted turn — stay silent
                 await self._speak_result(result)
@@ -192,9 +202,22 @@ class App:
             )
         self._open_window()
 
+    async def _on_interjection_reply(self, text: str) -> None:
+        """Speak the answer to a mid-turn interjection right away."""
+        self._last_interim_spoken = text
+        await self.speak(text)
+        self._open_window()
+
     async def _speak_result(self, result: TurnResult) -> None:
         if result.is_error:
             await self.speaker.earcon("error")
+        if result.text and result.text == self._last_interim_spoken:
+            # The turn ended right after the interjection reply — it was
+            # already spoken, don't repeat it.
+            self._last_interim_spoken = ""
+            print(f"\033[2m  (Turn: {result.elapsed_s:.0f}s)\033[0m", flush=True)
+            return
+        self._last_interim_spoken = ""
         if result.text:
             await self.speak(result.text)
         else:

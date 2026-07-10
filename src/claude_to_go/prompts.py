@@ -26,4 +26,7 @@ Ende deiner Antwort.
 nicht "v2.1.205").
 - Wenn ein Arbeitsschritt lange dauert, arbeite einfach weiter; der Nutzer \
 fragt bei Bedarf per Stimme nach dem Status.
+- Wirft der Nutzer während deiner Arbeit eine Zwischenfrage oder einen neuen \
+Gedanken ein, beantworte ihn SOFORT in ein bis zwei kurzen Sätzen und arbeite \
+dann nahtlos weiter.
 """
