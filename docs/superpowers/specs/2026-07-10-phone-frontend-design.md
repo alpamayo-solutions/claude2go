@@ -33,8 +33,13 @@ Mac → Phone: binäre WAV-Chunks (TTS) ·
 ## Netz & Sicherheit
 
 - Im Auto: Mac hängt am iPhone-Hotspot → direkte LAN-Verbindung.
-- Remote-Szenario (Mac bleibt zuhause): Tailscale; `tailscale serve` liefert
-  gültiges TLS (getUserMedia braucht Secure Context).
+- Remote-Szenario (Mac bleibt zuhause): Tailnet über den bestehenden
+  **Headscale**-Server (iPhone mit normalem Tailscale-Client). Damit ist der
+  Mac von überall erreichbar — das ist Variante 3 aus dem ursprünglichen
+  Brainstorming. TLS-Caveat: `tailscale serve`-Zertifikate brauchen
+  ACME/DNS-Unterstützung im Headscale-Setup; Fallback ist ein selbstsigniertes
+  Zertifikat, dem das iPhone einmalig vertraut (getUserMedia braucht Secure
+  Context).
 - Ohne Tailscale: selbstsigniertes Zertifikat, einmalig auf dem iPhone
   vertrauen. Token-Query-Param gegen fremde Verbindungen.
 
