@@ -247,6 +247,22 @@ def test_unconfident_ja_is_not_consent(tmp_path):
     asyncio.run(scenario())
 
 
+def test_voice_answer_in_question_echo_window_is_accepted(tmp_path):
+    # Regression: a spoken "ja" right after the question played was dropped as
+    # echo (the question text "… Ja oder Nein?" contains "ja"). The pending
+    # answer is exempt from the echo check, so it must be accepted.
+    async def scenario():
+        app = build_app(tmp_path)
+        task = asyncio.create_task(app._ask_permission("X testen", "raw"))
+        await wait_for_pending_future(app)
+        # Deliberately do NOT clear _tts_intervals: the question's +0.5s echo
+        # window is live and its spoken text is the echo reference.
+        await app.handle_utterance("ja", captured_at=time.monotonic(), confident=True)
+        assert await asyncio.wait_for(task, 2.0) is True
+
+    asyncio.run(scenario())
+
+
 def test_permission_stop_denies_immediately(tmp_path):
     async def scenario():
         app = build_app(tmp_path)
@@ -282,14 +298,35 @@ def test_bare_short_stop_during_tts_also_acts(tmp_path):
     asyncio.run(scenario())
 
 
-def test_other_text_during_tts_is_dropped_as_echo(tmp_path):
+def test_echo_of_claude_speech_during_tts_is_dropped(tmp_path):
+    # The mic picks up Claude's own reply — it transcribes to Claude's words,
+    # so it matches the spoken reference and is dropped.
     async def scenario():
         app = build_app(tmp_path)
         now = time.monotonic()
         app._tts_intervals.append((now - 1.0, now + 5.0))
-        await app.handle_utterance("Claude erstelle einen Branch", captured_at=now)
+        app._spoken_texts.append("Ich habe einen Branch erstellt und committet.")
+        await app.handle_utterance(
+            "ich habe einen Branch erstellt und committet", captured_at=now
+        )
         assert drain(app._messages) == []
         assert app.session.injected == []
+        assert app.speaker.stops == 0
+
+    asyncio.run(scenario())
+
+
+def test_real_command_over_tts_is_kept_and_queued(tmp_path):
+    # The driver speaks a NEW command while Claude is still reading its reply.
+    # It shares few words with what Claude said, so it is not echo: it is kept
+    # and queued (handled once speak() finishes — no interruption here).
+    async def scenario():
+        app = build_app(tmp_path)
+        now = time.monotonic()
+        app._tts_intervals.append((now - 1.0, now + 5.0))
+        app._spoken_texts.append("Ich habe die Datei gelesen, alles sieht gut aus.")
+        await app.handle_utterance("Claude erstelle einen Branch", captured_at=now)
+        assert drain(app._messages) == ["erstelle einen Branch"]
         assert app.speaker.stops == 0
 
     asyncio.run(scenario())
@@ -369,6 +406,7 @@ def test_echo_gate_catches_trailing_echo_by_overlap(tmp_path):
         app = build_app(tmp_path)
         now = time.monotonic()
         app._tts_intervals.append((now - 3.0, now - 1.0))  # playback just ended
+        app._spoken_texts.append("die tests sind grün soll ich committen")
         app._window_until = now + 10.0  # answer window open (worst case)
         await app.handle_utterance(
             "die tests sind grün soll ich committen",

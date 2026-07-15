@@ -2,8 +2,11 @@
 
 State model:
 - Mic is always segmenting — even during TTS. Utterances captured while the
-  assistant speaks pass a STOP-ONLY gate (voice barge-in): stop words abort
-  speech/turn, everything else is discarded (echo protection).
+  assistant speaks are echo-checked by CONTENT: acoustic echo transcribes to
+  Claude's own words and is dropped; a real command the driver spoke over the
+  reply is KEPT and routed normally (the turn worker only pulls it once
+  speak() has finished, so Claude talks to the end first). Stop words still
+  abort speech/turn immediately.
 - An utterance reaches Claude when it starts with a wake word, OR the answer
   window is open (right after Claude spoke), OR a permission answer is pending.
 - Permission answers must be a clear, short, CONFIDENT yes/no; "wiederhole"
@@ -16,6 +19,7 @@ State model:
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 import threading
 import time
@@ -38,6 +42,13 @@ from .wake import (
 )
 
 EventSink = Callable[[str, dict], None]
+
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _echo_words(text: str) -> set[str]:
+    """Word set for echo comparison — case-fold, punctuation-stripped."""
+    return set(_WORD_RE.findall(text.casefold()))
 
 
 class App:
@@ -65,6 +76,9 @@ class App:
         self._last_interim_spoken = ""
         self._tts_intervals: deque[tuple[float, float]] = deque(maxlen=8)
         self._current_tts_start: float | None = None
+        # Recent + in-flight TTS text — the reference the echo check matches
+        # captured utterances against (see _is_echo).
+        self._spoken_texts: deque[str] = deque(maxlen=4)
         self.pending_permission: dict | None = None  # phone reconnect resync
         self._speak_lock = asyncio.Lock()       # serializes TTS playback
         self._permission_lock = asyncio.Lock()  # one spoken dialog at a time
@@ -84,6 +98,7 @@ class App:
         async with self._speak_lock:
             start = time.monotonic()
             self._current_tts_start = start
+            self._spoken_texts.append(text)  # echo reference while it plays
             self.emit("state", value="speaking")
             self.emit("assistant", text=text)
             try:
@@ -103,6 +118,21 @@ class App:
             started_at <= iv_end and ended_at >= iv_start
             for iv_start, iv_end in self._tts_intervals
         )
+
+    def _is_echo(self, text: str) -> bool:
+        """True if `text` is (mostly) Claude's own recent speech coming back
+        through the mic. A real command the driver spoke shares few words with
+        what Claude just said, so it stays below the threshold and is kept."""
+        words = _echo_words(text)
+        if not words:
+            return False
+        spoken: set[str] = set()
+        for said in self._spoken_texts:
+            spoken |= _echo_words(said)
+        if not spoken:
+            return False
+        hits = sum(1 for w in words if w in spoken)
+        return hits / len(words) >= 0.7
 
     def _open_window(self) -> None:
         self._window_until = time.monotonic() + self.config.answer_window_s
@@ -151,8 +181,14 @@ class App:
         if captured_end is None:
             captured_end = captured_at
 
-        # 1. Voice barge-in gate: while the assistant speaks, ONLY stop words
-        # act; everything else is (potential) echo and gets dropped.
+        # 1. Voice barge-in gate. The mic also hears Claude's own TTS, so an
+        # utterance captured while it speaks might be acoustic echo. Tell them
+        # apart by CONTENT: echo transcribes to Claude's own words, a real
+        # command does not. Stop words abort immediately; genuine echo is
+        # dropped; anything else the driver said is KEPT and falls through to
+        # normal routing — the turn worker pulls the next message only after
+        # speak() returns, so it is handled once Claude finishes talking (no
+        # interruption).
         if not from_button and self._in_tts(captured_at, captured_end):
             wake_content = match_wake(text, self.strings.wake_words)
             candidate = wake_content if wake_content else text
@@ -162,10 +198,21 @@ class App:
                 print(f"\033[33m🎤 (Barge-in) {text}\033[0m", flush=True)
                 self.logbook.log("barge_in", text=text)
                 await self._do_stop()
-            else:
-                print(f"\033[2m🎤 (dropped during TTS) {text}\033[0m", flush=True)
+                return
+            # A pending question's answer is never echo — the question text
+            # itself often contains "ja"/"nein". Let step 2 judge it.
+            pending = self._answer_future
+            awaiting_answer = (
+                pending is not None and not pending.done()
+                and captured_at >= self._answer_started_at
+            )
+            if not awaiting_answer and self._is_echo(text):
+                print(f"\033[2m🎤 (dropped echo) {text}\033[0m", flush=True)
                 self.logbook.log("dropped_tts_echo", text=text)
-            return
+                return
+            print(f"\033[33m🎤 (over speech) {text}\033[0m", flush=True)
+            self.logbook.log("kept_over_tts", text=text)
+            # fall through to normal routing (steps 2 & 3)
 
         if not usable:
             print(f"\033[2m🎤 (uncertain, dropped) {text}\033[0m", flush=True)
