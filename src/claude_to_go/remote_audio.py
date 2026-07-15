@@ -29,7 +29,8 @@ from aiohttp import WSMsgType, web
 
 from .audio import UtteranceSegmenter, Vad
 from .config import Config
-from .tts import render_wav, sanitize_for_speech, pick_best_german_voice
+from .i18n import get_strings
+from .tts import pick_best_voice, render_wav, sanitize_for_speech
 
 
 class RemoteSpeaker:
@@ -39,9 +40,10 @@ class RemoteSpeaker:
     next hello — a turn result must not vanish in a connection blip.
     """
 
-    def __init__(self, server: "AudioServer", voice: str | None, rate: int, mute: bool) -> None:
+    def __init__(self, server: AudioServer, voice: str | None, rate: int, mute: bool,
+                 locale: str = "de_DE", fallback: str = "Anna") -> None:
         self._server = server
-        self._voice = voice or pick_best_german_voice()
+        self._voice = voice or pick_best_voice(locale, fallback)
         self._rate = rate
         self._mute = mute
         self._lock = asyncio.Lock()
@@ -80,7 +82,7 @@ class RemoteSpeaker:
                 # The phone reports playback end; the timeout covers lost
                 # clients and dead zones.
                 await asyncio.wait_for(self._done.wait(), timeout=duration + 5.0)
-            except (asyncio.TimeoutError, ConnectionError):
+            except (TimeoutError, ConnectionError):
                 pass
             finally:
                 self._speaking = False
@@ -113,7 +115,11 @@ class AudioServer:
         self._runner: web.AppRunner | None = None
         self._token = secrets.token_urlsafe(16)
         self._client_connected = asyncio.Event()
-        self.speaker = RemoteSpeaker(self, config.voice, config.speech_rate, config.mute)
+        strings = get_strings(config.language)
+        self.speaker = RemoteSpeaker(
+            self, config.voice, config.speech_rate, config.mute,
+            locale=strings.voice_locale, fallback=strings.fallback_voice,
+        )
         app.event_sink = self._on_app_event
 
     # ---------- lifecycle ----------
@@ -136,7 +142,10 @@ class AudioServer:
             else:
                 print("\033[33mTLS nicht verfügbar (openssl fehlt?) — HTTP-Modus; "
                       "Mikrofon funktioniert dann nur via localhost.\033[0m", flush=True)
-        site = web.TCPSite(self._runner, "0.0.0.0", self._config.phone_port, ssl_context=ssl_ctx)
+        # Binding all interfaces is the point: the phone connects over the LAN.
+        site = web.TCPSite(  # nosec B104
+            self._runner, "0.0.0.0", self._config.phone_port, ssl_context=ssl_ctx
+        )
         await site.start()
 
         url = f"{scheme}://{_lan_ip()}:{self._config.phone_port}/?t={self._token}"
@@ -307,7 +316,8 @@ def _ensure_tls(tls_dir: Path):
     cert, key = tls_dir / "cert.pem", tls_dir / "key.pem"
     if not (cert.exists() and key.exists()):
         tls_dir.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
+        # Fixed argv, openssl from PATH, no user input.
+        result = subprocess.run(  # nosec B603 B607
             ["openssl", "req", "-x509", "-newkey", "rsa:2048",
              "-keyout", str(key), "-out", str(cert), "-days", "825", "-nodes",
              "-subj", "/CN=claude-to-go",

@@ -3,7 +3,6 @@ permission answers. Constructed directly — no Whisper model involved."""
 
 from claude_to_go.stt import Transcript
 
-
 # ---------- usable ----------
 
 def test_empty_text_never_usable():

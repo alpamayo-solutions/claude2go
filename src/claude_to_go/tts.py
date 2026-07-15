@@ -19,22 +19,28 @@ EARCON_NAMES = tuple(_EARCONS)
 _MAX_SPOKEN_CHARS = 700
 
 
-def pick_best_german_voice() -> str:
-    """Best installed German voice: Premium > Enhanced > Anna (compact)."""
+def pick_best_voice(locale: str = "de_DE", fallback: str = "Anna") -> str:
+    """Best installed voice for a locale: Premium > Enhanced > any > fallback."""
     import subprocess
 
     try:
-        listing = subprocess.run(
+        # Fixed argv, macOS system tool ("say"), no user input.
+        listing = subprocess.run(  # nosec B603 B607
             ["say", "-v", "?"], capture_output=True, text=True
         ).stdout.splitlines()
     except OSError:
-        return "Anna"
-    german = [line.split("  ")[0].strip() for line in listing if "de_DE" in line]
+        return fallback
+    matches = [line.split("  ")[0].strip() for line in listing if locale in line]
     for tier in ("(Premium)", "(Enhanced)"):
-        for name in german:
+        for name in matches:
             if tier in name:
                 return name
-    return "Anna"
+    return matches[0] if matches else fallback
+
+
+# Backwards-compatible alias (older callers/tests).
+def pick_best_german_voice() -> str:
+    return pick_best_voice("de_DE", "Anna")
 
 
 def sanitize_for_speech(text: str) -> str:
@@ -81,8 +87,11 @@ async def render_wav(voice: str, rate: int, text: str) -> bytes:
 class Speaker:
     """Interruptible TTS. `speaking` is True while audio is playing."""
 
-    def __init__(self, voice: str | None, rate: int, mute: bool = False) -> None:
-        self._voice = voice or pick_best_german_voice()
+    def __init__(
+        self, voice: str | None, rate: int, mute: bool = False,
+        locale: str = "de_DE", fallback: str = "Anna",
+    ) -> None:
+        self._voice = voice or pick_best_voice(locale, fallback)
         self._rate = rate
         self._mute = mute
         self._proc: asyncio.subprocess.Process | None = None

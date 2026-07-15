@@ -2,6 +2,9 @@
 name = "claude-to-go"
 version = "0.1.0"
 description = "Hands-free voice layer on top of Claude Code for working while driving"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "claude-agent-sdk>=0.2.114",
@@ -17,7 +20,11 @@ dependencies = [
 c2g = "claude_to_go.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+    "bandit>=1.8",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,3 +35,31 @@ packages = ["src/claude_to_go"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# SIM105: try/except/pass in the audio/WebSocket hot paths is deliberate;
+# contextlib.suppress adds per-call overhead and hides intent less clearly here.
+ignore = ["SIM105"]
+
+[tool.ruff.lint.per-file-ignores]
+# Long German UI strings, argparse help texts, and risk-classifier regexes
+# that lose readability when wrapped.
+"src/claude_to_go/app.py" = ["E501"]
+"src/claude_to_go/cli.py" = ["E501"]
+"src/claude_to_go/config.py" = ["E501"]
+"src/claude_to_go/doctor.py" = ["E501"]
+"src/claude_to_go/risk.py" = ["E501"]
+
+[tool.bandit]
+targets = ["src"]
+exclude_dirs = ["tests", "dist"]
+# B404 flags the mere import of subprocess; every actual call site is
+# individually reviewed and annotated with a scoped `# nosec` (fixed argv,
+# no shell, macOS system tools: say/afplay/openssl).
+skips = ["B404"]

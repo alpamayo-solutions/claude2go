@@ -16,7 +16,7 @@ from claude_to_go.prompts import BRIEFING_PROMPT
 class FakeSession:
     def __init__(self):
         self.working = False
-        self.status_de = "Ich bin bereit und warte auf dich."
+        self.status_text = "Ich bin bereit und warte auf dich."
         self.injected = []
         self.interrupts = 0
         self.sent = []
@@ -355,7 +355,7 @@ def test_status_command_speaks_session_status(tmp_path):
     async def scenario():
         app = build_app(tmp_path)
         await app.handle_utterance("Claude Status")
-        assert app.session.status_de in app.speaker.said
+        assert app.session.status_text in app.speaker.said
         assert drain(app._messages) == []
 
     asyncio.run(scenario())

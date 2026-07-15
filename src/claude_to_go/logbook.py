@@ -19,7 +19,8 @@ class Logbook:
             log_dir.mkdir(parents=True, exist_ok=True)
             name = datetime.now().strftime("%Y%m%d-%H%M%S") + ".jsonl"
             self.path = log_dir / name
-            self._file = open(self.path, "a", encoding="utf-8")
+            # Long-lived handle by design; closed explicitly in close().
+            self._file = open(self.path, "a", encoding="utf-8")  # noqa: SIM115
         except OSError as exc:
             print(f"\033[2m(Fahrtenlog deaktiviert: {exc})\033[0m", flush=True)
             self.path = None

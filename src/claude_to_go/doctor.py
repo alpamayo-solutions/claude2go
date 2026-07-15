@@ -21,11 +21,16 @@ WARN = "\033[33m!\033[0m"
 async def run_doctor(config: Config) -> int:
     failures = 0
 
-    # 1. TTS voice
-    from .tts import pick_best_german_voice
+    from .i18n import get_strings
+    from .tts import pick_best_voice
 
-    voice = config.voice or pick_best_german_voice()
-    voices = subprocess.run(["say", "-v", "?"], capture_output=True, text=True).stdout
+    strings = get_strings(config.language)
+    print(f"Sprache / language: {strings.code}")
+
+    # 1. TTS voice
+    voice = config.voice or pick_best_voice(strings.voice_locale, strings.fallback_voice)
+    # Fixed argv, macOS system tool ("say"), no user input.
+    voices = subprocess.run(["say", "-v", "?"], capture_output=True, text=True).stdout  # nosec B603 B607
     if any(line.startswith(voice) for line in voices.splitlines()):
         quality = "Premium/Enhanced" if "(" in voice else "Standard — natürlichere Stimme via Systemeinstellungen → Bedienungshilfen → Gesprochene Inhalte laden"
         print(f"{OK} TTS-Stimme »{voice}« ({quality})")
@@ -73,7 +78,7 @@ async def run_doctor(config: Config) -> int:
     print("  Lade Whisper-Modell (einmalig ggf. Download) …")
     from .stt import Transcriber
 
-    transcriber = Transcriber(config.whisper_model, config.stt_language)
+    transcriber = Transcriber(config.whisper_model, strings.stt_language, strings.stt_prompt)
     transcript = transcriber.transcribe_sync(recording[:, 0].astype(np.float32) / 32768.0)
     if transcript.text:
         confidence = "sicher" if transcript.confident else ("brauchbar" if transcript.usable else "unsicher")

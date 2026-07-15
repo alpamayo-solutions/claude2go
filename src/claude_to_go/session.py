@@ -24,7 +24,7 @@ from claude_agent_sdk import (
 
 from . import risk
 from .config import Config
-from .prompts import VOICE_STYLE
+from .i18n import get_strings
 
 # async (spoken_summary, raw_detail) -> True (allow) / False (deny)
 PermissionAsker = Callable[[str, str], Awaitable[bool]]
@@ -45,6 +45,7 @@ class ClaudeSession:
         on_interjection_reply: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._config = config
+        self._strings = get_strings(config.language)
         self._ask_permission = ask_permission
         self._on_interjection_reply = on_interjection_reply
         self._client: ClaudeSDKClient | None = None
@@ -58,9 +59,11 @@ class ClaudeSession:
             cwd=str(self._config.cwd),
             model=self._config.model,
             continue_conversation=self._config.continue_conversation,
+            resume=self._config.resume,
             permission_mode="acceptEdits",
             setting_sources=["user", "project"],
-            system_prompt={"type": "preset", "preset": "claude_code", "append": VOICE_STYLE},
+            system_prompt={"type": "preset", "preset": "claude_code",
+                           "append": self._strings.voice_style},
             disallowed_tools=["AskUserQuestion"],
             can_use_tool=self._on_tool_permission,
             # The user's own settings allow-list (e.g. "Bash(*)") would silently
@@ -83,7 +86,9 @@ class ClaudeSession:
         except Exception:  # noqa: BLE001 — the old client may be beyond saving
             self._client = None
         self.working = False
+        # Continue the just-crashed conversation; resume+continue are exclusive.
         self._config.continue_conversation = True
+        self._config.resume = None
         await self.start()
 
     async def interrupt(self) -> None:
@@ -94,7 +99,8 @@ class ClaudeSession:
         """Steer the RUNNING turn — like typing mid-turn in interactive Claude
         Code. Verified: the message is absorbed into the current turn and
         answered at the next step boundary (single ResultMessage)."""
-        assert self._client is not None, "session not started"
+        # Internal invariant, never run under -O; not a security guard.
+        assert self._client is not None, "session not started"  # nosec B101
         self._unanswered_injections.append(text)
         await self._client.query(text)
 
@@ -105,18 +111,22 @@ class ClaudeSession:
         return pending
 
     @property
-    def status_de(self) -> str:
+    def status_text(self) -> str:
+        s = self._strings
         if not self.working or self.turn_started_at is None:
-            return "Ich bin bereit und warte auf dich."
+            return s.ready_status
         elapsed = int(time.monotonic() - self.turn_started_at)
         minutes, seconds = divmod(elapsed, 60)
-        duration = f"{minutes} Minuten" if minutes else f"{seconds} Sekunden"
-        tool = f", zuletzt {self.last_tool}" if self.last_tool else ""
-        return f"Ich arbeite seit {duration}{tool}."
+        duration = (s.minutes_unit if minutes else s.seconds_unit).format(
+            n=minutes or seconds
+        )
+        tool = s.last_tool_suffix.format(tool=self.last_tool) if self.last_tool else ""
+        return s.working_since.format(duration=duration, tool=tool)
 
     async def send(self, text: str) -> TurnResult:
         """Send one user message and stream until the turn completes."""
-        assert self._client is not None, "session not started"
+        # Internal invariant, never run under -O; not a security guard.
+        assert self._client is not None, "session not started"  # nosec B101
         self.working = True
         self.turn_started_at = time.monotonic()
         self.last_tool = None
@@ -155,18 +165,18 @@ class ClaudeSession:
     async def _pre_tool_hook(self, input_data, _tool_use_id, _context):
         tool_name = str(input_data.get("tool_name", ""))
         tool_input = dict(input_data.get("tool_input") or {})
-        if risk.classify(tool_name, tool_input).ask:
+        if risk.classify(tool_name, tool_input, self._strings).ask:
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "ask",
-                    "permissionDecisionReason": "Riskant — Fahrer muss per Stimme freigeben.",
+                    "permissionDecisionReason": "Risky — needs the driver's spoken approval.",
                 }
             }
         return {}
 
     async def _on_tool_permission(self, tool_name, tool_input, _context):
-        verdict = risk.classify(tool_name, dict(tool_input or {}))
+        verdict = risk.classify(tool_name, dict(tool_input or {}), self._strings)
         if not verdict.ask:
             return PermissionResultAllow()
         allowed = await self._ask_permission(verdict.spoken_summary, verdict.raw)
@@ -174,8 +184,7 @@ class ClaudeSession:
             return PermissionResultAllow()
         return PermissionResultDeny(
             message=(
-                "Der Fahrer hat diesen Schritt abgelehnt oder nicht geantwortet. "
-                "Überspringe ihn, mach mit dem Rest weiter und erwähne es kurz "
-                "in deiner Abschlussantwort."
+                "The driver declined this step or did not answer. Skip it, "
+                "continue with the rest, and mention it briefly in your final reply."
             )
         )

@@ -12,15 +12,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# Bias transcription toward the vocabulary we actually expect in the car.
-# Vocabulary only — no imperative phrases: Whisper regurgitates prompt
-# fragments as hallucinations on noise, and a hallucinated command would
-# self-trigger a turn.
-_INITIAL_PROMPT = (
-    "Claude. Git, Branch, Commit, Push, Deploy, Test, Bug, PREKIT, "
-    "Software-Entwicklung auf Deutsch."
-)
-
 
 @dataclass
 class Transcript:
@@ -44,18 +35,22 @@ class Transcript:
 
 
 class Transcriber:
-    def __init__(self, model_name: str, language: str) -> None:
+    def __init__(self, model_name: str, language: str, initial_prompt: str = "") -> None:
         from faster_whisper import WhisperModel  # heavy import, keep local
 
         self._model = WhisperModel(model_name, device="cpu", compute_type="int8")
         self._language = language
+        # Vocabulary bias only — no imperatives: Whisper regurgitates prompt
+        # fragments as hallucinations on noise, and a hallucinated command
+        # would self-trigger a turn.
+        self._initial_prompt = initial_prompt
 
     def transcribe_sync(self, audio_f32: np.ndarray) -> Transcript:
         segments, _info = self._model.transcribe(
             audio_f32,
             language=self._language,
             beam_size=2,
-            initial_prompt=_INITIAL_PROMPT,
+            initial_prompt=self._initial_prompt,
             condition_on_previous_text=False,
             vad_filter=False,  # we already segment with our own VAD
         )

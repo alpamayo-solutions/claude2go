@@ -1,4 +1,8 @@
-"""Wake-word matching and voice-command parsing on STT transcripts."""
+"""Wake-word matching and voice-command parsing on STT transcripts.
+
+All vocabulary comes from a language pack (`i18n.Strings`); it defaults to the
+German pack so existing callers and tests keep working without passing one.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,10 @@ import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
+
+from .i18n import Strings, get_strings
+
+_DEFAULT = get_strings("de")
 
 
 class Command(Enum):
@@ -21,13 +29,6 @@ class Command(Enum):
 class Routed:
     command: Command
     text: str  # remaining content with wake word stripped
-
-
-_STOP_WORDS = {"stopp", "stop", "halt", "abbrechen", "abbruch"}
-_STOP_PHRASES = ("hör auf", "hoer auf")
-_STATUS_WORDS = {"status", "zwischenstand", "stand"}
-_NOTE_PREFIXES = ("merk dir", "merke dir", "notiere", "notiz", "schreib dir auf", "merken")
-_BRIEFING_WORDS = {"briefing", "morgenbriefing", "lagebericht"}
 
 
 def _normalize(text: str) -> str:
@@ -56,24 +57,24 @@ def match_wake(text: str, wake_words: tuple[str, ...]) -> str | None:
     return match.group("rest").strip()
 
 
-def parse_command(content: str) -> Routed:
-    """Classify addressed content into stop/status/message.
+def parse_command(content: str, strings: Strings = _DEFAULT) -> Routed:
+    """Classify addressed content into stop/status/note/briefing/message.
 
-    Stop/status must be short utterances — a stop word inside a longer
-    instruction ("stopp die Tests nicht, sondern …") stays a message.
+    Stop/status/briefing must be short utterances — a keyword inside a longer
+    instruction stays a message.
     """
     normalized = _normalize(content)
     tokens = normalized.split()
     if tokens and len(tokens) <= 4:
-        if any(t in _STOP_WORDS for t in tokens[:2]) or any(
-            normalized.startswith(p) or f" {p}" in normalized for p in _STOP_PHRASES
+        if any(t in strings.stop_words for t in tokens[:2]) or any(
+            normalized.startswith(p) or f" {p}" in normalized for p in strings.stop_phrases
         ):
             return Routed(Command.STOP, "")
-        if len(tokens) <= 3 and any(t in _STATUS_WORDS for t in tokens[:2]):
+        if len(tokens) <= 3 and any(t in strings.status_words for t in tokens[:2]):
             return Routed(Command.STATUS, "")
-        if len(tokens) <= 3 and any(t in _BRIEFING_WORDS for t in tokens[:2]):
+        if len(tokens) <= 3 and any(t in strings.briefing_words for t in tokens[:2]):
             return Routed(Command.BRIEFING, "")
-    for prefix in _NOTE_PREFIXES:
+    for prefix in strings.note_prefixes:
         if normalized.startswith(prefix):
             # keep the note text in original casing/punctuation
             note = content.strip()[len(prefix):].lstrip(" ,.:;—-")
@@ -82,38 +83,21 @@ def parse_command(content: str) -> Routed:
     return Routed(Command.MESSAGE, content.strip())
 
 
-# Deliberately narrow: these words grant destructive actions while driving.
-# Everyday conversational German ("mach", "gut", "klar", "passt") must NOT
-# count as consent — ambient passenger/radio speech would trigger it.
-_YES_WORDS = {
-    "ja", "jawohl", "jo", "jap", "yes", "yep", "okay", "ok",
-    "erlaubt", "erlauben", "einverstanden", "freigeben", "genehmigt",
-}
-_NO_WORDS = {
-    "nein", "ne", "nee", "nö", "no", "nope", "nicht", "stopp", "stop", "lass",
-    "ablehnen", "abgelehnt", "verboten", "niemals", "warte", "abbrechen",
-}
-
-
-_REPEAT_WORDS = {"wiederhole", "wiederholen", "nochmal", "wie bitte", "was"}
-_DETAIL_WORDS = {"details", "detail", "welcher", "welchen", "zeig", "vorlesen"}
-
-
-def parse_permission_extra(text: str) -> str | None:
+def parse_permission_extra(text: str, strings: Strings = _DEFAULT) -> str | None:
     """Detect 'repeat the question' / 'read the raw command' requests."""
     normalized = _normalize(text)
     tokens = normalized.split()
     if not tokens or len(tokens) > 5:
         return None
-    if any(t in _REPEAT_WORDS for t in tokens) or normalized == "wie bitte":
+    if any(t in strings.repeat_words for t in tokens):
         return "repeat"
-    if any(t in _DETAIL_WORDS for t in tokens):
+    if any(t in strings.detail_words for t in tokens):
         return "details"
     return None
 
 
-def parse_yes_no(text: str) -> bool | None:
-    """Parse a spoken German yes/no answer. None means unclear.
+def parse_yes_no(text: str, strings: Strings = _DEFAULT) -> bool | None:
+    """Parse a spoken yes/no answer. None means unclear.
 
     Long utterances are never treated as answers — an in-flight command
     sentence must not accidentally approve a risky action.
@@ -122,8 +106,8 @@ def parse_yes_no(text: str) -> bool | None:
     if not tokens or len(tokens) > 4:
         return None
     token_set = set(tokens)
-    yes = bool(token_set & _YES_WORDS)
-    no = bool(token_set & _NO_WORDS)
+    yes = bool(token_set & strings.yes_words)
+    no = bool(token_set & strings.no_words)
     if yes and not no:
         return True
     if no and not yes:

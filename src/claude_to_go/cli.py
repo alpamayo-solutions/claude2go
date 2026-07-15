@@ -8,7 +8,8 @@ import os
 import sys
 from pathlib import Path
 
-from .config import Config
+from .config import Config, apply_settings, load_settings
+from .i18n import LANGUAGES
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -18,7 +19,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cwd", type=Path, default=None, help="Projektverzeichnis (Default: aktuelles)")
     parser.add_argument("--model", default=None, help="Modell-Override (z.B. opus, sonnet)")
+    parser.add_argument("--lang", choices=sorted(LANGUAGES), default=None,
+                        help="Sprache der Bedienung (Default: aus Einstellungen, sonst de)")
     parser.add_argument("--continue", dest="cont", action="store_true", help="letzte Session fortsetzen (mit gesprochenem Recap)")
+    parser.add_argument("--resume", nargs="?", const="", default=None, metavar="SESSION_ID",
+                        help="bestimmte Session fortsetzen (ohne ID: letzte im Verzeichnis)")
     parser.add_argument("--typed", action="store_true", help="tippen statt sprechen (Ausgabe weiterhin per Stimme)")
     parser.add_argument("--send", default=None, metavar="TEXT", help="eine Nachricht senden, Antwort ausgeben, beenden")
     parser.add_argument("--phone", action="store_true", help="iPhone als Mikrofon und Lautsprecher (PWA-Frontend)")
@@ -27,7 +32,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mute", action="store_true", help="keine Sprachausgabe (nur Konsole)")
     parser.add_argument("--no-log", action="store_true", help="kein Fahrtenprotokoll schreiben")
     parser.add_argument("--mic", default=None, help="Mikrofon-Name (Substring)")
-    parser.add_argument("--voice", default=None, help="TTS-Stimme (Default: beste deutsche Stimme)")
+    parser.add_argument("--voice", default=None, help="TTS-Stimme (Default: beste Stimme der Sprache)")
     parser.add_argument("--whisper-model", default=None, help="Whisper-Modell (Default: small)")
     parser.add_argument("command", nargs="?", choices=["doctor"], help="doctor: Setup prüfen")
     return parser
@@ -35,11 +40,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _config_from_args(args: argparse.Namespace) -> Config:
     config = Config()
+    # Precedence: built-in defaults < settings file < CLI flags.
+    apply_settings(config, load_settings())
+
     if args.cwd:
         config.cwd = args.cwd.expanduser().resolve()
     if args.model:
         config.model = args.model
+    if args.lang:
+        config.language = args.lang
     config.continue_conversation = args.cont
+    if args.resume is not None:
+        if args.resume == "":       # bare --resume: most recent in cwd
+            config.continue_conversation = True
+        else:
+            config.resume = args.resume
     config.typed = args.typed
     config.send_once = args.send
     config.mute = args.mute
@@ -64,6 +79,8 @@ def main() -> None:
     modes = [bool(args.send), args.typed, args.phone]
     if sum(modes) > 1:
         parser.error("--send, --typed und --phone schließen sich gegenseitig aus")
+    if args.cont and args.resume:
+        parser.error("--continue und --resume schließen sich aus")
 
     # A stray API key would silently switch billing from the subscription to
     # pay-as-you-go API rates — never allow that in this wrapper.

@@ -1,4 +1,4 @@
-from claude_to_go.config import Config
+from claude_to_go.i18n import get_strings
 from claude_to_go.wake import (
     Command,
     match_wake,
@@ -7,7 +7,7 @@ from claude_to_go.wake import (
     parse_yes_no,
 )
 
-WAKE = Config().wake_words
+WAKE = get_strings("de").wake_words
 
 
 def test_wake_at_start():
