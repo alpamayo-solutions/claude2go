@@ -22,7 +22,7 @@ class Logbook:
             # Long-lived handle by design; closed explicitly in close().
             self._file = open(self.path, "a", encoding="utf-8")  # noqa: SIM115
         except OSError as exc:
-            print(f"\033[2m(Fahrtenlog deaktiviert: {exc})\033[0m", flush=True)
+            print(f"\033[2m(drive log disabled: {exc})\033[0m", flush=True)
             self.path = None
 
     def log(self, event: str, **fields) -> None:

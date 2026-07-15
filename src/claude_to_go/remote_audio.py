@@ -140,8 +140,8 @@ class AudioServer:
             if ssl_ctx is not None:
                 scheme = "https"
             else:
-                print("\033[33mTLS nicht verfügbar (openssl fehlt?) — HTTP-Modus; "
-                      "Mikrofon funktioniert dann nur via localhost.\033[0m", flush=True)
+                print("\033[33mTLS not available (openssl missing?) — HTTP mode; "
+                      "the microphone then only works via localhost.\033[0m", flush=True)
         # Binding all interfaces is the point: the phone connects over the LAN.
         site = web.TCPSite(  # nosec B104
             self._runner, "0.0.0.0", self._config.phone_port, ssl_context=ssl_ctx
@@ -149,13 +149,12 @@ class AudioServer:
         await site.start()
 
         url = f"{scheme}://{_lan_ip()}:{self._config.phone_port}/?t={self._token}"
-        print(f"\n📱 Phone-Frontend: \033[1m{url}\033[0m", flush=True)
+        print(f"\n📱 Phone frontend: \033[1m{url}\033[0m", flush=True)
         _print_qr(url)
         if scheme == "https":
-            print("(Selbstsigniertes Zertifikat — beim ersten Öffnen in Safari "
-                  "»Details« → »Webseite öffnen« bestätigen. Für den "
-                  "Home-Bildschirm-Modus /cert.pem laden und als Profil "
-                  "installieren.)\n", flush=True)
+            print("(Self-signed certificate — on first open in Safari confirm "
+                  "“Details” → “Visit Website”. For home-screen mode, load "
+                  "/cert.pem and install it as a profile.)\n", flush=True)
 
     async def wait_for_client(self) -> None:
         await self._client_connected.wait()
@@ -173,7 +172,7 @@ class AudioServer:
 
     async def _index(self, request: web.Request) -> web.Response:
         if not self._authorized(request):
-            return web.Response(status=403, text="Ungültiger oder fehlender Token.")
+            return web.Response(status=403, text="Invalid or missing token.")
         html = resources.files("claude_to_go").joinpath("phone/index.html").read_text("utf-8")
         return web.Response(text=html, content_type="text/html")
 
@@ -224,14 +223,14 @@ class AudioServer:
     async def _ws_handler(self, request: web.Request) -> web.StreamResponse:
         if not self._authorized(request):
             # The socket controls a live Claude session — no token, no entry.
-            return web.Response(status=403, text="Ungültiger oder fehlender Token.")
+            return web.Response(status=403, text="Invalid or missing token.")
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()  # newest authorized client wins
         self._ws = ws
         self._client_connected.set()
-        print("\033[32m📱 Phone verbunden\033[0m", flush=True)
+        print("\033[32m📱 Phone connected\033[0m", flush=True)
 
         segmenter = UtteranceSegmenter(
             vad=Vad(self._config.vad_aggressiveness, self._config.sample_rate),
@@ -252,7 +251,7 @@ class AudioServer:
         finally:
             if self._ws is ws:
                 self._ws = None
-            print("\033[33m📱 Phone getrennt\033[0m", flush=True)
+            print("\033[33m📱 Phone disconnected\033[0m", flush=True)
         return ws
 
     async def _on_client_msg(self, payload: dict) -> None:

@@ -163,12 +163,12 @@ class App:
                 self.logbook.log("barge_in", text=text)
                 await self._do_stop()
             else:
-                print(f"\033[2m🎤 (während TTS verworfen) {text}\033[0m", flush=True)
+                print(f"\033[2m🎤 (dropped during TTS) {text}\033[0m", flush=True)
                 self.logbook.log("dropped_tts_echo", text=text)
             return
 
         if not usable:
-            print(f"\033[2m🎤 (unsicher, verworfen) {text}\033[0m", flush=True)
+            print(f"\033[2m🎤 (uncertain, dropped) {text}\033[0m", flush=True)
             self.logbook.log("dropped_low_confidence", text=text)
             return
 
@@ -180,22 +180,22 @@ class App:
         if future and not future.done() and captured_at >= self._answer_started_at:
             candidate = wake_content if wake_content else text
             if parse_command(candidate, self.strings).command is Command.STOP:
-                print(f"\033[33m🎤 (Stopp während Freigabe) {text}\033[0m", flush=True)
+                print(f"\033[33m🎤 (stop during permission) {text}\033[0m", flush=True)
                 self.logbook.log("permission_stop", text=text)
                 future.set_result("nein")
                 await self._do_stop()
                 return
             is_answer = parse_yes_no(candidate, self.strings) is not None or parse_permission_extra(candidate, self.strings) is not None
             if is_answer and confident:
-                print(f"\033[33m🎤 (Antwort) {candidate}\033[0m", flush=True)
+                print(f"\033[33m🎤 (answer) {candidate}\033[0m", flush=True)
                 future.set_result(candidate)
                 return
             if is_answer and not confident:
-                print(f"\033[2m🎤 (Antwort zu unsicher, ignoriert) {text}\033[0m", flush=True)
+                print(f"\033[2m🎤 (answer too uncertain, ignored) {text}\033[0m", flush=True)
                 self.logbook.log("dropped_unconfident_answer", text=text)
                 return
             if wake_content is None:
-                print(f"\033[2m🎤 (ignoriert, keine klare Antwort) {text}\033[0m", flush=True)
+                print(f"\033[2m🎤 (ignored, no clear answer) {text}\033[0m", flush=True)
                 return
             # wake-addressed but not an answer: fall through as a new command
 
@@ -216,7 +216,7 @@ class App:
                     self._grace_task = asyncio.create_task(self._confirm_meant_me(text))
                 return
             else:
-                print(f"\033[2m🎤 (ignoriert) {text}\033[0m", flush=True)
+                print(f"\033[2m🎤 (ignored) {text}\033[0m", flush=True)
                 self.logbook.log("ignored", text=text)
                 return
         if not content:
@@ -251,7 +251,7 @@ class App:
             # Steer the running turn directly — answered at the next step
             # boundary instead of waiting for the turn to finish.
             await self.speaker.earcon("ack")
-            print("\033[2m  (in laufenden Turn eingeworfen)\033[0m", flush=True)
+            print("\033[2m  (injected into running turn)\033[0m", flush=True)
             self.logbook.log("interjection", text=message)
             await self.session.inject(message)
             return
@@ -275,12 +275,12 @@ class App:
         try:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(f"- [ ] {note}  <!-- {stamp}, unterwegs diktiert -->\n")
-            print(f"\033[32m📝 notiert: {note}\033[0m", flush=True)
+            print(f"\033[32m📝 noted: {note}\033[0m", flush=True)
             self.logbook.log("note", text=note)
             self.emit("note", text=note)
             await self.speaker.earcon("ack")
         except OSError as exc:
-            print(f"\033[31mNotiz fehlgeschlagen: {exc}\033[0m", flush=True)
+            print(f"\033[31mNote failed: {exc}\033[0m", flush=True)
             await self.speaker.earcon("error")
             await self.speak(self.strings.note_failed, sanitize=False)
 
@@ -300,7 +300,7 @@ class App:
 
     async def _ask_permission(self, spoken_summary: str, raw: str = "") -> bool:
         if not self.interactive:
-            print(f"\033[31m(auto-abgelehnt, kein Dialog möglich: {spoken_summary})\033[0m", flush=True)
+            print(f"\033[31m(auto-denied, no dialog possible: {spoken_summary})\033[0m", flush=True)
             self.logbook.log("permission", summary=spoken_summary, decision="auto_deny")
             return False
         # The SDK spawns each permission request as its own task; without this
@@ -388,7 +388,7 @@ class App:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — must not kill the loop
-                print(f"\033[31mFehler beim Vorlesen: {exc}\033[0m", flush=True)
+                print(f"\033[31mError while speaking: {exc}\033[0m", flush=True)
             self.emit("state", value="idle")
 
     async def _run_turn_with_retry(self, message: str) -> TurnResult | None:
@@ -412,7 +412,7 @@ class App:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                print(f"\033[31mFehler: {exc}\033[0m", flush=True)
+                print(f"\033[31mError: {exc}\033[0m", flush=True)
                 self.logbook.log("turn_error", error=str(exc)[:300], attempt=attempt)
                 await self.speaker.earcon("error")
                 if self._interrupted_turn:
@@ -422,7 +422,7 @@ class App:
                 try:
                     await self.session.reconnect()
                 except Exception as reconnect_exc:  # noqa: BLE001
-                    print(f"\033[31mReconnect fehlgeschlagen: {reconnect_exc}\033[0m", flush=True)
+                    print(f"\033[31mReconnect failed: {reconnect_exc}\033[0m", flush=True)
                     break
                 if self._interrupted_turn:
                     return None
@@ -448,14 +448,14 @@ class App:
             # The turn ended right after the interjection reply — it was
             # already spoken, don't repeat it.
             self._last_interim_spoken = ""
-            print(f"\033[2m  (Turn: {result.elapsed_s:.0f}s)\033[0m", flush=True)
+            print(f"\033[2m  (turn: {result.elapsed_s:.0f}s)\033[0m", flush=True)
             return
         self._last_interim_spoken = ""
         if result.text:
             await self.speak(result.text)
         else:
             await self.speak(self.strings.no_answer_text, sanitize=False)
-        print(f"\033[2m  (Turn: {result.elapsed_s:.0f}s)\033[0m", flush=True)
+        print(f"\033[2m  (turn: {result.elapsed_s:.0f}s)\033[0m", flush=True)
         if self._messages.empty():
             self._open_window()
             await self.speaker.earcon("listen")
@@ -499,7 +499,7 @@ class App:
         from .audio import MicListener
         from .stt import Transcriber
 
-        print("Lade Spracherkennung …", flush=True)
+        print("Loading speech recognition …", flush=True)
         transcriber = Transcriber(self.config.whisper_model, self.strings.stt_language, self.strings.stt_prompt)
         utterances: asyncio.Queue = asyncio.Queue()
         self.mic = MicListener(
@@ -515,7 +515,7 @@ class App:
         self.mic.start()
         worker = await self._startup(self.strings.greeting)
         stdin_task = asyncio.create_task(self._stdin_barge_in(_stdin_line_queue()))
-        print("Sag »Claude …« — Enter stoppt die Sprachausgabe, q beendet.", flush=True)
+        print("Say “Claude …” — Enter stops the speech output, q quits.", flush=True)
         try:
             await self._consume_utterances(utterances, transcriber)
         finally:
@@ -531,14 +531,14 @@ class App:
         from .remote_audio import AudioServer
         from .stt import Transcriber
 
-        print("Lade Spracherkennung …", flush=True)
+        print("Loading speech recognition …", flush=True)
         transcriber = Transcriber(self.config.whisper_model, self.strings.stt_language, self.strings.stt_prompt)
         utterances: asyncio.Queue = asyncio.Queue()
         server = AudioServer(self.config, self, utterances)
         self.speaker = server.speaker  # TTS now plays on the phone
         await server.start()
         # Greeting and --continue recap must reach ears — wait for the phone.
-        print("Warte auf das Telefon …", flush=True)
+        print("Waiting for the phone …", flush=True)
         await server.wait_for_client()
         worker = await self._startup(self.strings.greeting)
         try:
@@ -563,7 +563,7 @@ class App:
 
     async def run_typed(self) -> None:
         worker = await self._startup(self.strings.typed_greeting)
-        print("Tippen und Enter. Kommandos: stop, status, briefing, merk dir …, q.", flush=True)
+        print("Type and press Enter. Commands: stop, status, briefing, note …, q.", flush=True)
         lines = _stdin_line_queue()
         try:
             while True:

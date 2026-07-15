@@ -78,7 +78,7 @@ def load_settings(path: Path = SETTINGS_PATH) -> dict:
         with open(path, "rb") as f:
             data = tomllib.load(f)
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        print(f"\033[33m(Einstellungen in {path} ignoriert: {exc})\033[0m", flush=True)
+        print(f"\033[33m(settings in {path} ignored: {exc})\033[0m", flush=True)
         return {}
     return {k: v for k, v in data.items() if k in _SETTINGS_KEYS}
 

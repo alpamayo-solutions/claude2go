@@ -17,24 +17,24 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="c2g",
         description="Claude-to-go: hands-free voice layer on top of Claude Code.",
     )
-    parser.add_argument("--cwd", type=Path, default=None, help="Projektverzeichnis (Default: aktuelles)")
-    parser.add_argument("--model", default=None, help="Modell-Override (z.B. opus, sonnet)")
+    parser.add_argument("--cwd", type=Path, default=None, help="project directory (default: current)")
+    parser.add_argument("--model", default=None, help="model override (e.g. opus, sonnet)")
     parser.add_argument("--lang", choices=sorted(LANGUAGES), default=None,
-                        help="Sprache der Bedienung (Default: aus Einstellungen, sonst de)")
-    parser.add_argument("--continue", dest="cont", action="store_true", help="letzte Session fortsetzen (mit gesprochenem Recap)")
+                        help="interaction language (default: from settings, else de)")
+    parser.add_argument("--continue", dest="cont", action="store_true", help="resume last session (with spoken recap)")
     parser.add_argument("--resume", nargs="?", const="", default=None, metavar="SESSION_ID",
-                        help="bestimmte Session fortsetzen (ohne ID: letzte im Verzeichnis)")
-    parser.add_argument("--typed", action="store_true", help="tippen statt sprechen (Ausgabe weiterhin per Stimme)")
-    parser.add_argument("--send", default=None, metavar="TEXT", help="eine Nachricht senden, Antwort ausgeben, beenden")
-    parser.add_argument("--phone", action="store_true", help="iPhone als Mikrofon und Lautsprecher (PWA-Frontend)")
-    parser.add_argument("--port", type=int, default=None, help="Port fürs Phone-Frontend (Default 8443)")
-    parser.add_argument("--phone-http", action="store_true", help="Phone-Frontend ohne TLS (nur localhost-Tests)")
-    parser.add_argument("--mute", action="store_true", help="keine Sprachausgabe (nur Konsole)")
-    parser.add_argument("--no-log", action="store_true", help="kein Fahrtenprotokoll schreiben")
-    parser.add_argument("--mic", default=None, help="Mikrofon-Name (Substring)")
-    parser.add_argument("--voice", default=None, help="TTS-Stimme (Default: beste Stimme der Sprache)")
-    parser.add_argument("--whisper-model", default=None, help="Whisper-Modell (Default: small)")
-    parser.add_argument("command", nargs="?", choices=["doctor"], help="doctor: Setup prüfen")
+                        help="resume a specific session (without ID: latest in directory)")
+    parser.add_argument("--typed", action="store_true", help="type instead of speak (output still spoken)")
+    parser.add_argument("--send", default=None, metavar="TEXT", help="send one message, print the reply, exit")
+    parser.add_argument("--phone", action="store_true", help="iPhone as microphone and speaker (PWA frontend)")
+    parser.add_argument("--port", type=int, default=None, help="port for the phone frontend (default 8443)")
+    parser.add_argument("--phone-http", action="store_true", help="phone frontend without TLS (localhost tests only)")
+    parser.add_argument("--mute", action="store_true", help="no speech output (console only)")
+    parser.add_argument("--no-log", action="store_true", help="do not write a drive log")
+    parser.add_argument("--mic", default=None, help="microphone name (substring)")
+    parser.add_argument("--voice", default=None, help="TTS voice (default: best voice for the language)")
+    parser.add_argument("--whisper-model", default=None, help="Whisper model (default: small)")
+    parser.add_argument("command", nargs="?", choices=["doctor"], help="doctor: check setup")
     return parser
 
 
@@ -78,14 +78,14 @@ def main() -> None:
     args = parser.parse_args()
     modes = [bool(args.send), args.typed, args.phone]
     if sum(modes) > 1:
-        parser.error("--send, --typed und --phone schließen sich gegenseitig aus")
+        parser.error("--send, --typed and --phone are mutually exclusive")
     if args.cont and args.resume:
-        parser.error("--continue und --resume schließen sich aus")
+        parser.error("--continue and --resume are mutually exclusive")
 
     # A stray API key would silently switch billing from the subscription to
     # pay-as-you-go API rates — never allow that in this wrapper.
     if os.environ.pop("ANTHROPIC_API_KEY", None):
-        print("Hinweis: ANTHROPIC_API_KEY entfernt — c2g nutzt bewusst nur den Abo-Login.")
+        print("Note: ANTHROPIC_API_KEY removed — c2g deliberately uses the subscription login only.")
 
     config = _config_from_args(args)
 
@@ -109,7 +109,7 @@ def main() -> None:
         else:
             asyncio.run(app.run_voice())
     except KeyboardInterrupt:
-        print("\nTschüss.")
+        print("\nBye.")
 
 
 if __name__ == "__main__":
