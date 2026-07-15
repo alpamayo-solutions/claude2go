@@ -5,7 +5,11 @@ description = "Hands-free voice layer on top of Claude Code for working while dr
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.11,<3.13"
+# Floor 3.11: config.py reads settings via stdlib `tomllib` (3.11+).
+# Cap <3.14: webrtcvad-wheels ships no cp314 wheel yet; every other native
+# dep (ctranslate2, onnxruntime, sounddevice) already does — lift the cap
+# once that wheel lands.
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "claude-agent-sdk>=0.2.114",
     "faster-whisper>=1.1.0",
